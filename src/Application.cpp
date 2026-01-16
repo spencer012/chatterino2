@@ -8,6 +8,7 @@
 #include "common/Channel.hpp"
 #include "common/Version.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/chathistory/ChatHistoryManager.hpp"
 #include "controllers/commands/Command.hpp"
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/highlights/HighlightController.hpp"
@@ -204,6 +205,7 @@ Application::Application(Settings &_settings, const Paths &paths,
     , twitchUsers(new TwitchUsers)
     , pronouns(new pronouns::Pronouns)
     , spellChecker(new SpellChecker)
+    , chatHistoryManager(new ChatHistoryManager(paths))
 #ifdef CHATTERINO_HAVE_PLUGINS
     , plugins(new PluginController(paths))
 #endif
@@ -622,6 +624,14 @@ SpellChecker *Application::getSpellChecker()
     return this->spellChecker.get();
 }
 
+ChatHistoryManager *Application::getChatHistoryManager()
+{
+    assertInGuiThread();
+    assert(this->chatHistoryManager);
+
+    return this->chatHistoryManager.get();
+}
+
 void Application::aboutToQuit()
 {
     ABOUT_TO_QUIT.store(true);
@@ -632,6 +642,7 @@ void Application::aboutToQuit()
 
     this->hotkeys->save();
     this->windows->save();
+    this->chatHistoryManager->save();
 
     this->windows->closeAll();
 }

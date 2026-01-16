@@ -7,6 +7,7 @@
 #include "Application.hpp"
 #include "common/enums/MessageOverflow.hpp"
 #include "common/QLogging.hpp"
+#include "controllers/chathistory/ChatHistoryManager.hpp"
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "controllers/spellcheck/SpellChecker.hpp"
@@ -31,6 +32,7 @@
 #include "widgets/Scrollbar.hpp"
 #include "widgets/splits/InputCompletionPopup.hpp"
 #include "widgets/splits/InputHighlighter.hpp"
+#include "widgets/splits/MessageHistoryPopup.hpp"
 #include "widgets/splits/Split.hpp"
 #include "widgets/splits/SplitContainer.hpp"
 
@@ -462,6 +464,28 @@ void SplitInput::postMessageSend(const QString &message,
         !message.trimmed().isEmpty())
     {
         this->prevMsg_.append(message);
+
+        // Also add to persistent ChatHistoryManager
+        auto channel = this->split_->getChannel();
+        if (channel)
+        {
+            QString channelId =
+                channel->getType() == Channel::Type::Twitch
+                    ? QString("twitch:%1").arg(channel->getName())
+                    : channel->getName();
+
+            auto *app = getApp();
+            if (app)
+            {
+                auto *historyManager = app->getChatHistoryManager();
+                if (historyManager)
+                {
+                    historyManager->addMessage(channelId, message);
+                    qCDebug(chatterinoWidget)
+                        << "Added message to history for channel" << channelId;
+                }
+            }
+        }
     }
 
     if (arguments.empty() || arguments.at(0) != "keepInput")
@@ -728,6 +752,26 @@ void SplitInput::addShortcuts()
              this->ui_.textEdit->setTextCursor(cursor);
              return "";
          }},
+        {"openMessageHistory",
+         [this](const std::vector<QString> &arguments) -> QString {
+             (void)arguments;
+
+             qCDebug(chatterinoWidget) << "openMessageHistory action triggered";
+
+             if (this->historySearchMode_)
+             {
+                 // Already in search mode - cycle to next match
+                 if (auto *popup = this->messageHistoryPopup_.data())
+                 {
+                     popup->selectNextMatch();
+                 }
+             }
+             else
+             {
+                 this->openMessageHistory();
+             }
+             return "";
+         }},
     };
 
     this->shortcuts_ = getApp()->getHotkeys()->shortcutsForCategory(
@@ -750,6 +794,15 @@ bool SplitInput::eventFilter(QObject *obj, QEvent *event)
                 return false;
             }
         }
+
+        if (auto *popup = this->messageHistoryPopup_.data())
+        {
+            if (popup->isVisible())
+            {
+                event->accept();
+                return false;
+            }
+        }
     }
 
     return BaseWidget::eventFilter(obj, event);
@@ -769,6 +822,49 @@ void SplitInput::installTextEditEvents()
                     {
                         event->accept();
                         return;
+                    }
+                }
+            }
+
+            // Handle message history popup events
+            if (this->historySearchMode_)
+            {
+                if (auto *popup = this->messageHistoryPopup_.data())
+                {
+                    if (popup->isVisible())
+                    {
+                        int key = event->key();
+
+                        // Enter selects the current item
+                        if (key == Qt::Key_Return || key == Qt::Key_Enter)
+                        {
+                            QString selected = popup->getSelectedMessage();
+                            if (!selected.isEmpty())
+                            {
+                                this->ui_.textEdit->setPlainText(selected);
+                                this->ui_.textEdit->moveCursor(
+                                    QTextCursor::End);
+                            }
+                            this->exitHistorySearch(false);
+                            event->accept();
+                            return;
+                        }
+
+                        // Escape cancels and restores
+                        if (key == Qt::Key_Escape)
+                        {
+                            this->exitHistorySearch(true);
+                            event->accept();
+                            return;
+                        }
+
+                        // Up/Down navigate the popup
+                        if (key == Qt::Key_Up || key == Qt::Key_Down)
+                        {
+                            popup->eventFilter(nullptr, event);
+                            event->accept();
+                            return;
+                        }
                     }
                 }
             }
@@ -839,7 +935,14 @@ void SplitInput::mousePressEvent(QMouseEvent *event)
 
 void SplitInput::onTextChanged()
 {
-    this->updateCompletionPopup();
+    if (this->historySearchMode_)
+    {
+        this->updateHistoryPopup();
+    }
+    else
+    {
+        this->updateCompletionPopup();
+    }
 }
 
 void SplitInput::onCursorPositionChanged()
@@ -942,6 +1045,171 @@ void SplitInput::showCompletionPopup(const QString &text, CompletionKind kind)
 void SplitInput::hideCompletionPopup()
 {
     if (auto *popup = this->inputCompletionPopup_.data())
+    {
+        popup->hide();
+    }
+}
+
+void SplitInput::openMessageHistory()
+{
+    qCDebug(chatterinoWidget) << "openMessageHistory() called";
+
+    auto channel = this->split_->getChannel();
+    if (!channel)
+    {
+        qCDebug(chatterinoWidget) << "No channel, returning";
+        return;
+    }
+
+    this->historySearchMode_ = true;
+
+    // Create popup if needed
+    if (this->messageHistoryPopup_.isNull())
+    {
+        qCDebug(chatterinoWidget) << "Creating MessageHistoryPopup";
+        this->messageHistoryPopup_ = new MessageHistoryPopup(this);
+        this->messageHistoryPopup_->setAttribute(Qt::WA_DeleteOnClose, false);
+
+        this->messageHistoryPopup_->setInputAction(
+            [that = QPointer(this)](const QString &text) mutable {
+                if (auto *self = that.data())
+                {
+                    self->ui_.textEdit->setPlainText(text);
+                    self->ui_.textEdit->moveCursor(QTextCursor::End);
+                    self->exitHistorySearch(false);
+                }
+            });
+
+        // Connect cancelled signal
+        std::ignore = this->messageHistoryPopup_->cancelled.connect([this] {
+            this->exitHistorySearch(true);
+        });
+
+        // Connect messageSelected signal
+        std::ignore = this->messageHistoryPopup_->messageSelected.connect(
+            [this](const QString &msg) {
+                this->ui_.textEdit->setPlainText(msg);
+                this->ui_.textEdit->moveCursor(QTextCursor::End);
+                this->exitHistorySearch(false);
+            });
+    }
+
+    auto *popup = this->messageHistoryPopup_.data();
+
+    // Get channel identifier
+    QString channelId =
+        channel->getType() == Channel::Type::Twitch
+            ? QString("twitch:%1").arg(channel->getName())
+            : channel->getName();
+
+    // Get history from ChatHistoryManager
+    auto *app = getApp();
+    if (!app)
+    {
+        qCWarning(chatterinoWidget) << "getApp() returned null";
+        this->exitHistorySearch(true);
+        return;
+    }
+    auto *historyManager = app->getChatHistoryManager();
+    if (!historyManager)
+    {
+        qCWarning(chatterinoWidget) << "getChatHistoryManager() returned null";
+        this->exitHistorySearch(true);
+        return;
+    }
+    QStringList messages = historyManager->getMessages(channelId);
+
+    qCDebug(chatterinoWidget)
+        << "Got" << messages.size() << "messages for channel" << channelId;
+
+    // Use current text as initial search filter (don't clear the text box)
+    QString currentText = this->ui_.textEdit->toPlainText();
+
+    // Get filtered messages based on current text
+    QStringList filteredMessages;
+    if (currentText.isEmpty())
+    {
+        filteredMessages = messages;
+    }
+    else
+    {
+        filteredMessages = historyManager->getFiltered(channelId, currentText);
+    }
+
+    // Update and show popup - set width to match input
+    popup->setFixedWidth(this->width());
+    popup->updateHistory(filteredMessages, currentText);
+
+    auto pos = this->mapToGlobal(QPoint{0, 0}) - QPoint(0, popup->height());
+    qCDebug(chatterinoWidget) << "Showing popup at" << pos << "with size"
+                              << popup->size();
+    popup->move(pos);
+    popup->show();
+    popup->raise();
+    popup->activateWindow();
+}
+
+void SplitInput::exitHistorySearch(bool /*restoreText*/)
+{
+    // Note: restoreText parameter kept for API compatibility but no longer used
+    // since we don't clear the text box when entering search mode
+    this->historySearchMode_ = false;
+    this->hideHistoryPopup();
+}
+
+void SplitInput::updateHistoryPopup()
+{
+    if (!this->historySearchMode_)
+    {
+        return;
+    }
+
+    auto *popup = this->messageHistoryPopup_.data();
+    if (!popup || !popup->isVisible())
+    {
+        qCDebug(chatterinoWidget)
+            << "updateHistoryPopup - popup not visible or null";
+        return;
+    }
+
+    auto channel = this->split_->getChannel();
+    if (!channel)
+    {
+        qCDebug(chatterinoWidget) << "updateHistoryPopup - no channel";
+        return;
+    }
+
+    QString channelId =
+        channel->getType() == Channel::Type::Twitch
+            ? QString("twitch:%1").arg(channel->getName())
+            : channel->getName();
+
+    QString searchText = this->ui_.textEdit->toPlainText();
+
+    qCDebug(chatterinoWidget)
+        << "updateHistoryPopup - channelId:" << channelId
+        << "searchText:" << searchText;
+
+    auto *app = getApp();
+    auto *historyManager = app->getChatHistoryManager();
+    QStringList messages = historyManager->getFiltered(channelId, searchText);
+
+    qCDebug(chatterinoWidget)
+        << "updateHistoryPopup - got" << messages.size() << "messages";
+
+    popup->updateHistory(messages, searchText);
+
+    // Reposition popup - it may have changed height
+    // Position directly above the input, centered horizontally
+    QPoint inputTopLeft = this->mapToGlobal(QPoint{0, 0});
+    int popupHeight = popup->height();
+    int xOffset = (this->width() - popup->width()) / 2;
+    popup->move(inputTopLeft.x() + xOffset, inputTopLeft.y() - popupHeight);
+}
+
+void SplitInput::hideHistoryPopup()
+{
+    if (auto *popup = this->messageHistoryPopup_.data())
     {
         popup->hide();
     }

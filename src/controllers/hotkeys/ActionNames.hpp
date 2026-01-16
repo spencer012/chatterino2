@@ -272,6 +272,8 @@ inline const std::map<HotkeyCategory, ActionDefinitionMap> actionNames{
               .argumentsPrompt = "Behavior:",
           }},
          {"undo", ActionDefinition{"Undo"}},
+         {"openMessageHistory",
+          ActionDefinition{"Search message history (reverse search)"}},
 
      }},
     {HotkeyCategory::Window,

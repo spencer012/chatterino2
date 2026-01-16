@@ -75,6 +75,9 @@ set(SOURCE_FILES
         controllers/accounts/AccountModel.cpp
         controllers/accounts/AccountModel.hpp
 
+        controllers/chathistory/ChatHistoryManager.cpp
+        controllers/chathistory/ChatHistoryManager.hpp
+
         controllers/commands/builtin/chatterino/Debugging.cpp
         controllers/commands/builtin/chatterino/Debugging.hpp
         controllers/commands/builtin/Misc.cpp
@@ -840,6 +843,10 @@ set(SOURCE_FILES
         widgets/splits/InputCompletionPopup.hpp
         widgets/splits/InputHighlighter.cpp
         widgets/splits/InputHighlighter.hpp
+        widgets/splits/MessageHistoryItem.cpp
+        widgets/splits/MessageHistoryItem.hpp
+        widgets/splits/MessageHistoryPopup.cpp
+        widgets/splits/MessageHistoryPopup.hpp
         widgets/splits/Split.cpp
         widgets/splits/Split.hpp
         widgets/splits/SplitCommon.hpp

@@ -378,7 +378,7 @@ void HotkeyController::addDefaults(std::set<QString> &addedHotkeys)
                             QKeySequence("Ctrl+W"), "delete",
                             std::vector<QString>(), "delete");
         this->tryAddDefault(addedHotkeys, HotkeyCategory::Split,
-                            QKeySequence("Ctrl+R"), "changeChannel",
+                            QKeySequence("Ctrl+Shift+R"), "changeChannel",
                             std::vector<QString>(), "change channel");
         this->tryAddDefault(addedHotkeys, HotkeyCategory::Split,
                             QKeySequence("Ctrl+F"), "showSearch",
@@ -481,6 +481,10 @@ void HotkeyController::addDefaults(std::set<QString> &addedHotkeys)
         this->tryAddDefault(addedHotkeys, HotkeyCategory::SplitInput,
                             QKeySequence("Down"), "nextMessage",
                             std::vector<QString>(), "next message");
+
+        this->tryAddDefault(addedHotkeys, HotkeyCategory::SplitInput,
+                            QKeySequence("Ctrl+R"), "openMessageHistory",
+                            std::vector<QString>(), "search message history");
     }
 
     // window
