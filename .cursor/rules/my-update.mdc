@@ -1,0 +1,26 @@
+---
+description: Custom fork documentation - tracks custom features and modified files for merge conflict resolution
+alwaysApply: true
+---
+
+This is a fork of an existing open source project with some custom functionality that was implemented for my use. Document the general status of each of them here to expidite future merge conflicts and to harden against future changes.
+
+1. **Chat History / Reverse Search (Ctrl+R)**
+   - **Feature**: Terminal-style reverse incremental search for previously sent messages. Press `Ctrl+R` in the chat input to open a popup showing message history. Type to filter results in real-time. Arrow keys or scroll to navigate, Enter to select.
+   - **Files Added**:
+     - `src/controllers/chathistory/ChatHistoryManager.hpp/.cpp` - Singleton managing per-channel message history with persistence to `Misc/chat-history.json`. Stores up to 5000 messages per channel, deduplicates consecutive identical messages, and provides filtered search.
+     - `src/widgets/splits/MessageHistoryPopup.hpp/.cpp` - Popup UI for displaying and navigating history with search term highlighting.
+     - `src/widgets/splits/MessageHistoryItem.hpp/.cpp` - Custom list item for rendering messages with highlighted search matches.
+   - **Files Modified**:
+     - `src/Application.hpp/.cpp` - Added `ChatHistoryManager` singleton initialization and `getChatHistoryManager()` accessor.
+     - `src/widgets/splits/SplitInput.hpp/.cpp` - Added `historySearchMode_`, `openMessageHistory()`, `updateHistoryPopup()`, `hideHistoryPopup()`, `exitHistorySearch()` methods. Modified `eventFilter()` to handle search mode keyboard events. Modified `postMessageSend()` to record messages to history.
+     - `src/controllers/hotkeys/HotkeyController.cpp` - Changed default `Ctrl+R` from "changeChannel" (now `Ctrl+Shift+R`) to "openMessageHistory".
+     - `src/controllers/hotkeys/ActionNames.hpp` - Added "openMessageHistory" action definition.
+     - `src/CMakeLists.txt` - Added new source files.
+     - `mocks/include/mocks/EmptyApplication.hpp` - Added mock for `getChatHistoryManager()`.
+   - **Behavior Notes**:
+     - History saves every 60 seconds and 5 seconds after the last message sent.
+     - Popup shrinks to fit content (minimum 1 row, maximum 7 rows).
+     - Current text in input is preserved when opening/closing search.
+     - Non-contiguous duplicate messages are collapsed when filtering.
+
