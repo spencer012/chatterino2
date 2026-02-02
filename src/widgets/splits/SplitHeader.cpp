@@ -457,6 +457,10 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
             h->getDisplaySequence(HotkeyCategory::Split, "openPlayerInBrowser"),
             this->split_, &Split::openBrowserPlayer);
         menu->addAction(
+            OPEN_CHAT_IN_BROWSER,
+            h->getDisplaySequence(HotkeyCategory::Split, "openChatInBrowser"),
+            this->split_, &Split::openBrowserChat);
+        menu->addAction(
             OPEN_IN_STREAMLINK,
             h->getDisplaySequence(HotkeyCategory::Split, "openInStreamlink"),
             this->split_, &Split::openInStreamlink);
