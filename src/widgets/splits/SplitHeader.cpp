@@ -22,6 +22,7 @@
 #include "singletons/StreamerMode.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
+#include "util/Clipboard.hpp"
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutHelper.hpp"
@@ -545,6 +546,10 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
                 }
             });
         }
+
+        menu->addAction("Copy channel name", [twitchChannel] {
+            crossPlatformCopy(twitchChannel->getDisplayName());
+        });
 
         menu->addSeparator();
     }
