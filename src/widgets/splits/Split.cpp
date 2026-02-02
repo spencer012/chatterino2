@@ -454,6 +454,11 @@ void Split::addShortcuts()
              this->openBrowserPlayer();
              return "";
          }},
+        {"openChatInBrowser",
+         [this](const std::vector<QString> &) -> QString {
+             this->openBrowserChat();
+             return "";
+         }},
         {"openModView",
          [this](const std::vector<QString> &) -> QString {
              this->openModViewInBrowser();
@@ -1166,6 +1171,17 @@ void Split::openWhispersInBrowser()
 void Split::openBrowserPlayer()
 {
     this->openChannelInBrowserPlayer(this->getChannel());
+}
+
+void Split::openBrowserChat()
+{
+    auto channel = this->getChannel();
+
+    if (auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
+    {
+        QDesktopServices::openUrl(
+            QUrl(TWITCH_CHAT_URL.arg(twitchChannel->getName())));
+    }
 }
 
 void Split::openModViewInBrowser()

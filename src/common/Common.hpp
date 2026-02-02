@@ -21,6 +21,8 @@ inline constexpr QStringView LINK_CHATTERINO_SOURCE =
 
 inline constexpr QStringView TWITCH_PLAYER_URL =
     u"https://player.twitch.tv/?channel=%1&parent=twitch.tv";
+inline constexpr QStringView TWITCH_CHAT_URL =
+    u"https://www.twitch.tv/popout/%1/chat";
 
 enum class HighlightState {
     None,
