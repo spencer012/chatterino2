@@ -204,6 +204,7 @@ public Q_SLOTS:
     void openModViewInBrowser();
     void openWhispersInBrowser();
     void openBrowserPlayer();
+    void openBrowserChat();
     void openInStreamlink();
     void openWithCustomScheme();
     void setFiltersDialog();

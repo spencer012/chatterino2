@@ -116,6 +116,7 @@ inline const std::map<HotkeyCategory, ActionDefinitionMap> actionNames{
          {"openInBrowser", ActionDefinition{"Open channel in browser"}},
          {"openPlayerInBrowser",
           ActionDefinition{"Open stream in browser player"}},
+         {"openChatInBrowser", ActionDefinition{"Open chat in browser"}},
          {"openInCustomPlayer",
           ActionDefinition{"Open stream in custom player"}},
          {"openInStreamlink", ActionDefinition{"Open stream in streamlink"}},
