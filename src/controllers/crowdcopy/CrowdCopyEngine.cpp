@@ -7,6 +7,7 @@
 #include "messages/MessageFlag.hpp"
 #include "singletons/Settings.hpp"
 
+#include <QRandomGenerator>
 #include <QTime>
 
 #include <cmath>
@@ -99,6 +100,7 @@ CrowdCopyResult CrowdCopyEngine::evaluate(const std::vector<MessagePtr> &message
 
     struct WeightedMessage {
         QString text;
+        QString caseInsensitiveKey;
         double weight;
     };
 
@@ -145,6 +147,7 @@ CrowdCopyResult CrowdCopyEngine::evaluate(const std::vector<MessagePtr> &message
 
         weightedMessages.push_back(
             {.text = normalizedText,
+             .caseInsensitiveKey = normalizedText.toCaseFolded(),
              .weight = decayWeight(ageSeconds, halfLifeSeconds)});
     }
 
@@ -153,9 +156,15 @@ CrowdCopyResult CrowdCopyEngine::evaluate(const std::vector<MessagePtr> &message
         return {};
     }
 
+    struct VariantStats {
+        double score{0.0};
+        int users{0};
+    };
+
     struct GroupStats {
         double score{0.0};
         int users{0};
+        std::unordered_map<QString, VariantStats> variants;
     };
 
     std::unordered_map<QString, GroupStats> grouped;
@@ -164,26 +173,29 @@ CrowdCopyResult CrowdCopyEngine::evaluate(const std::vector<MessagePtr> &message
     double totalScore = 0.0;
     for (const auto &msg : weightedMessages)
     {
-        auto &group = grouped[msg.text];
+        auto &group = grouped[msg.caseInsensitiveKey];
         group.score += msg.weight;
         group.users += 1;
+        auto &variant = group.variants[msg.text];
+        variant.score += msg.weight;
+        variant.users += 1;
         totalScore += msg.weight;
     }
 
-    QString bestText;
+    QString bestKey;
     GroupStats bestStats;
     double bestScore = -std::numeric_limits<double>::infinity();
-    for (const auto &[text, stats] : grouped)
+    for (const auto &[key, stats] : grouped)
     {
         if (stats.score > bestScore)
         {
             bestScore = stats.score;
-            bestText = text;
+            bestKey = key;
             bestStats = stats;
         }
     }
 
-    if (bestText.isEmpty())
+    if (bestKey.isEmpty())
     {
         return {};
     }
@@ -198,8 +210,39 @@ CrowdCopyResult CrowdCopyEngine::evaluate(const std::vector<MessagePtr> &message
         return {};
     }
 
+    QString chosenText;
+    VariantStats chosenVariant;
+    bool hasChosen = false;
+    for (const auto &[variantText, stats] : bestStats.variants)
+    {
+        if (!hasChosen || stats.users > chosenVariant.users ||
+            (stats.users == chosenVariant.users &&
+             stats.score > chosenVariant.score))
+        {
+            chosenText = variantText;
+            chosenVariant = stats;
+            hasChosen = true;
+            continue;
+        }
+
+        if (stats.users == chosenVariant.users &&
+            qFuzzyCompare(stats.score + 1.0, chosenVariant.score + 1.0))
+        {
+            if (QRandomGenerator::global()->bounded(2) == 0)
+            {
+                chosenText = variantText;
+                chosenVariant = stats;
+            }
+        }
+    }
+
+    if (chosenText.isEmpty())
+    {
+        return {};
+    }
+
     return {
-        .text = bestText,
+        .text = chosenText,
         .userCount = bestStats.users,
     };
 }
