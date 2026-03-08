@@ -913,15 +913,17 @@ void SplitInput::addShortcuts()
          [this](const std::vector<QString> &arguments) -> QString {
              (void)arguments;
 
+             if (this->crowdCopyEnabled_)
+             {
+                 return "Cannot use message history search while Crowd Copy is enabled.";
+             }
+
              qCDebug(chatterinoWidget) << "openMessageHistory action triggered";
 
              if (this->historySearchMode_)
              {
-                 // Already in search mode - cycle to next match
-                 if (auto *popup = this->messageHistoryPopup_.data())
-                 {
-                     popup->selectNextMatch();
-                 }
+                 // Already in search mode - close the popup
+                 this->exitHistorySearch(false);
              }
              else
              {
@@ -937,6 +939,10 @@ void SplitInput::addShortcuts()
              {
                  return "Crowd Copy is only available in Twitch channel splits.";
              }
+            if (this->historySearchMode_)
+            {
+                return "Cannot enable Crowd Copy while message history search is active.";
+            }
 
              this->setCrowdCopyEnabled(!this->isCrowdCopyEnabled());
              return "";
@@ -983,6 +989,8 @@ void SplitInput::installTextEditEvents()
     // the textEdit object, so it will always be deleted before SplitInput
     std::ignore =
         this->ui_.textEdit->keyPressed.connect([this](QKeyEvent *event) {
+            this->suppressCompletionPopupUntilUserInput_ = false;
+
             if (auto *popup = this->inputCompletionPopup_.data())
             {
                 if (popup->isVisible())
@@ -1142,6 +1150,12 @@ void SplitInput::onCursorPositionChanged()
 
 void SplitInput::updateCompletionPopup()
 {
+    if (this->suppressCompletionPopupUntilUserInput_)
+    {
+        this->hideCompletionPopup();
+        return;
+    }
+
     auto *channel = this->split_->getChannel().get();
     auto *tc = dynamic_cast<TwitchChannel *>(channel);
     bool showEmoteCompletion = getSettings()->emoteCompletionWithColon;
@@ -1243,6 +1257,13 @@ void SplitInput::hideCompletionPopup()
 void SplitInput::openMessageHistory()
 {
     qCDebug(chatterinoWidget) << "openMessageHistory() called";
+
+    if (this->crowdCopyEnabled_)
+    {
+        qCDebug(chatterinoWidget)
+            << "openMessageHistory() blocked by Crowd Copy mode";
+        return;
+    }
 
     auto channel = this->split_->getChannel();
     if (!channel)
@@ -1475,7 +1496,8 @@ void SplitInput::startCrowdCopySwitchBuffer(const QString &targetText)
 void SplitInput::crowdCopyTick()
 {
     if (!this->crowdCopyEnabled_ || !this->isCrowdCopySupportedChannel() ||
-        this->crowdCopyInBuffer_)
+        this->crowdCopyInBuffer_ || this->split_ == nullptr ||
+        !this->split_->isVisible())
     {
         return;
     }
@@ -1487,14 +1509,24 @@ void SplitInput::crowdCopyTick()
     }
 
     const auto now = QDateTime::currentDateTimeUtc();
-    const auto result =
-        CrowdCopyEngine::evaluate(channel->getMessageSnapshot(), now);
-    const auto winner = result.text;
+    const auto maxMessages = std::max(
+        getSettings()->crowdCopyMaxMessagesToAnalyze.getValue(), 1);
+    const auto result = CrowdCopyEngine::evaluate(
+        channel->getMessageSnapshot(static_cast<size_t>(maxMessages)), now);
+    auto winner = result.text;
+
+    // Keep the current case variant stable if the winner only differs by capitalization.
+    if (!winner.isEmpty() && !this->crowdCopyCurrentText_.isEmpty() &&
+        winner.compare(this->crowdCopyCurrentText_, Qt::CaseInsensitive) == 0)
+    {
+        winner = this->crowdCopyCurrentText_;
+    }
 
     if (this->crowdCopyIsFirstWinner_ && this->crowdCopyCurrentText_.isEmpty() &&
         !winner.isEmpty())
     {
         this->crowdCopyIsFirstWinner_ = false;
+        this->suppressCompletionPopupUntilUserInput_ = true;
         this->applyCrowdCopyText(winner);
         return;
     }
@@ -1928,7 +1960,13 @@ void SplitInput::setCrowdCopyEnabled(bool enabled)
         return;
     }
 
+    if (enabled && this->historySearchMode_)
+    {
+        return;
+    }
+
     this->crowdCopyEnabled_ = enabled;
+    this->ui_.textEdit->setReadOnly(enabled);
     this->updateCrowdCopyIndicator();
 
     if (!enabled)
@@ -1940,6 +1978,11 @@ void SplitInput::setCrowdCopyEnabled(bool enabled)
         if (this->crowdCopySwitchBufferTimer_ != nullptr)
         {
             this->crowdCopySwitchBufferTimer_->stop();
+        }
+        if (this->ui_.textEdit->toPlainText() != "")
+        {
+            this->ui_.textEdit->setPlainText("");
+            this->ui_.textEdit->moveCursor(QTextCursor::Start);
         }
         this->resetCrowdCopyState();
         return;

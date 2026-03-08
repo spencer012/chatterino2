@@ -1210,6 +1210,17 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                             })
         ->addTo(layout);
 
+    SettingWidget::intInput("Crowd Copy max messages analyzed",
+                            s.crowdCopyMaxMessagesToAnalyze,
+                            {
+                                .min = 10,
+                                .max = 1000,
+                                .singleStep = 10,
+                            })
+        ->setTooltip("Limits how many most-recent messages are inspected each "
+                     "evaluation tick.")
+        ->addTo(layout);
+
     SettingWidget::intInput("Crowd Copy switch blank buffer (ms)",
                             s.crowdCopySwitchBufferMs,
                             {
