@@ -207,6 +207,7 @@ protected:
     QString crowdCopyBufferTargetText_;
     QDateTime crowdCopyPendingStart_;
     QString defaultPlaceholderText_;
+    bool suppressCompletionPopupUntilUserInput_{false};
 
     void openMessageHistory();
     void exitHistorySearch(bool restoreText);
