@@ -845,6 +845,8 @@ public:
     IntSetting crowdCopyUpdateIntervalMs = {"/crowdCopy/updateIntervalMs", 50};
     IntSetting crowdCopySwitchBufferMs = {"/crowdCopy/switchBufferMs", 200};
     IntSetting crowdCopyConfirmationMs = {"/crowdCopy/confirmationMs", 500};
+    IntSetting crowdCopyMaxMessagesToAnalyze = {
+        "/crowdCopy/maxMessagesToAnalyze", 100};
 
     /// Timeout buttons
 
