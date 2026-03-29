@@ -915,7 +915,7 @@ void SplitInput::addShortcuts()
 
              if (this->crowdCopyEnabled_)
              {
-                 return "Cannot use message history search while Crowd Copy is enabled.";
+                 return "";
              }
 
              qCDebug(chatterinoWidget) << "openMessageHistory action triggered";
@@ -937,11 +937,11 @@ void SplitInput::addShortcuts()
 
              if (!this->isCrowdCopySupportedChannel())
              {
-                 return "Crowd Copy is only available in Twitch channel splits.";
+                 return "";
              }
             if (this->historySearchMode_)
             {
-                return "Cannot enable Crowd Copy while message history search is active.";
+                return "";
             }
 
              this->setCrowdCopyEnabled(!this->isCrowdCopyEnabled());
@@ -1011,6 +1011,16 @@ void SplitInput::installTextEditEvents()
                     if (popup->isVisible())
                     {
                         int key = event->key();
+                        const auto modifiers = event->modifiers();
+
+                        // Ctrl+R toggles history mode off while the popup is open.
+                        if (key == Qt::Key_R &&
+                            modifiers.testFlag(Qt::ControlModifier))
+                        {
+                            this->exitHistorySearch(false);
+                            event->accept();
+                            return;
+                        }
 
                         // Enter selects the current item
                         if (key == Qt::Key_Return || key == Qt::Key_Enter)
@@ -1962,7 +1972,7 @@ void SplitInput::setCrowdCopyEnabled(bool enabled)
 
     if (enabled && this->historySearchMode_)
     {
-        return;
+        this->exitHistorySearch(false);
     }
 
     this->crowdCopyEnabled_ = enabled;
