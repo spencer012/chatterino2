@@ -32,7 +32,7 @@ public:
     ChatHistoryManager &operator=(ChatHistoryManager &&) = delete;
 
     /// Maximum number of messages to store per channel
-    static constexpr int MAX_HISTORY_PER_CHANNEL = 5000;
+    static constexpr int MAX_HISTORY_PER_CHANNEL = 20000;
 
     /// @brief Adds a message to the history for the given channel
     /// @param channelName The channel identifier (e.g., "twitch:pajlada")
