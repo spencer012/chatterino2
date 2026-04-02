@@ -9,6 +9,7 @@
 #include "common/Version.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/chathistory/ChatHistoryManager.hpp"
+#include "controllers/channelpoints/ChannelPointsController.hpp"
 #include "controllers/commands/Command.hpp"
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/highlights/HighlightController.hpp"
@@ -194,6 +195,7 @@ Application::Application(Settings &_settings, const Paths &paths,
     , pronouns(new pronouns::Pronouns)
     , spellChecker(new SpellChecker)
     , chatHistoryManager(new ChatHistoryManager(paths))
+    , channelPoints(new ChannelPointsController)
 #ifdef CHATTERINO_HAVE_PLUGINS
     , plugins(new PluginController(paths))
 #endif
@@ -621,6 +623,14 @@ ChatHistoryManager *Application::getChatHistoryManager()
     return this->chatHistoryManager.get();
 }
 
+ChannelPointsController *Application::getChannelPoints()
+{
+    assertInGuiThread();
+    assert(this->channelPoints);
+
+    return this->channelPoints.get();
+}
+
 void Application::aboutToQuit()
 {
     ABOUT_TO_QUIT.store(true);
@@ -632,6 +642,7 @@ void Application::aboutToQuit()
     this->hotkeys->save();
     this->windows->save();
     this->chatHistoryManager->save();
+    this->channelPoints->stop();
 
     this->windows->closeAll();
 }
@@ -645,6 +656,7 @@ void Application::stop()
     this->twitchUsers.reset();
     this->streamerMode.reset();
     this->linkResolver.reset();
+    this->channelPoints.reset();
     this->seventvEventAPI.reset();
     this->seventvEmotes.reset();
     this->ffzEmotes.reset();

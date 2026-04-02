@@ -90,6 +90,7 @@ private:
 
     SvgButton *moderationButton_{};
     SvgButton *chattersButton_{};
+    LabelButton *channelPointsButton_{};
     DrawnButton *addButton_{};
 
     // states

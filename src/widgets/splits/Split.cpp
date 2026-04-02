@@ -34,6 +34,7 @@
 #include "widgets/Notebook.hpp"
 #include "widgets/OverlayWindow.hpp"
 #include "widgets/Scrollbar.hpp"
+#include "widgets/splits/ChannelPointsPopup.hpp"
 #include "widgets/splits/DraggedSplit.hpp"
 #include "widgets/splits/PinnedMessageWidget.hpp"
 #include "widgets/splits/SplitContainer.hpp"
@@ -331,6 +332,11 @@ void Split::addShortcuts()
         {"showSearch",
          [this](const std::vector<QString> &) -> QString {
              this->showSearch(true);
+             return "";
+         }},
+        {"showChannelPoints",
+         [this](const std::vector<QString> &) -> QString {
+             this->openChannelPointsPopup();
              return "";
          }},
         {"showGlobalSearch",
@@ -1315,6 +1321,29 @@ void Split::showSearch(bool singleChannel)
     }
 
     popup->show();
+}
+
+void Split::openChannelPointsPopup()
+{
+    auto *twitchChannel = dynamic_cast<TwitchChannel *>(this->getChannel().get());
+    if (twitchChannel == nullptr)
+    {
+        return;
+    }
+
+    if (!this->channelPointsPopup_.isNull())
+    {
+        this->channelPointsPopup_->show();
+        this->channelPointsPopup_->raise();
+        this->channelPointsPopup_->activateWindow();
+        return;
+    }
+
+    auto *popup = new ChannelPointsPopup(this, this);
+    this->channelPointsPopup_ = popup;
+    widgets::showAndMoveWindowTo(
+        popup, this->mapToGlobal(QPoint{0, this->header_->height()}),
+        widgets::BoundsChecking::CursorPosition);
 }
 
 void Split::reconnect()

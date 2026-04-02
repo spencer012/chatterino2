@@ -219,6 +219,11 @@ public:
         return nullptr;
     }
 
+    ChannelPointsController *getChannelPoints() override
+    {
+        return nullptr;
+    }
+
 #ifdef CHATTERINO_HAVE_PLUGINS
     PluginController *getPlugins() override
     {

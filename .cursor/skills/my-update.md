@@ -3,7 +3,7 @@ name: my-updates
 alwaysApply: true
 ---
 
-This is a fork of an existing open source project with some custom functionality that was implemented for my use. Document the general status of each of them here to expedite future merge conflicts and to harden against future changes.
+This is a fork of an existing open source project with some custom functionality that was implemented for my use. Document the general status of each of them here to expedite future merge conflicts and to harden against future changes. When creating a new feature, make sure to add it in here and keep it up to date 
 
 1. **Chat History / Reverse Search (Ctrl+R)**
    - **Feature**: Terminal-style reverse incremental search for previously sent messages. Press `Ctrl+R` in the chat input to open a popup showing message history. Type to filter results in real-time. Arrow keys or scroll to navigate, Enter to select.
@@ -23,4 +23,55 @@ This is a fork of an existing open source project with some custom functionality
      - Popup shrinks to fit content (minimum 1 row, maximum 7 rows).
      - Current text in input is preserved when opening/closing search.
      - Non-contiguous duplicate messages are collapsed when filtering.
+
+2. **Chat Control / Crowd Copy (Per-Split Ctrl+D Toggle)**
+   - **Feature**: Per-split chat control mode that predicts a likely crowd message from recent chat and prefills the split input.
+   - **Files Added**:
+     - `src/controllers/crowdcopy/CrowdCopyEngine.hpp/.cpp` - Stateless evaluator for predicted message selection.
+   - **Files Modified**:
+     - `src/widgets/splits/SplitInput.hpp/.cpp` - Added chat control state/timers, prediction updates, toggle handling, lock input behavior, mutual exclusion with reverse search, and visual active indicator.
+     - `src/widgets/splits/Split.hpp/.cpp` - Added split-level crowd copy mode getters/setters and persistence plumbing.
+     - `src/controllers/hotkeys/ActionNames.hpp` - Added `toggleCrowdCopy` action.
+     - `src/controllers/hotkeys/HotkeyController.cpp` - Added default `Ctrl+D` keybind.
+     - `src/singletons/Settings.hpp` - Added tunable crowd-copy settings.
+     - `src/widgets/settingspages/GeneralPage.cpp` - Added Crowd Copy settings section in preferences.
+     - `src/common/WindowDescriptors.hpp/.cpp` - Added split descriptor field for persisted crowd copy mode.
+     - `src/singletons/WindowManager.cpp` - Save/load of split crowd copy mode.
+     - `src/widgets/splits/SplitContainer.cpp` - Apply persisted crowd copy mode on restore.
+     - `src/CMakeLists.txt` - Added crowd copy sources.
+   - **Behavior Notes**:
+     - Toggle is restricted to normal Twitch channel splits (`Twitch`/`TwitchWatching`) and ignored in non-channel/special splits.
+     - Prediction uses time decay and per-user dedupe, is capitalization-agnostic for grouping, and preserves dominant capitalization variant for display.
+     - Initial winner can be immediate; later winner changes require confirmation window plus blank buffer before swap.
+     - Prediction loop runs only for visible split tabs and analyzes a capped recent-message count (`crowdCopyMaxMessagesToAnalyze`, default 100).
+     - While chat control is enabled, input is read-only and is cleared on disable.
+     - `Ctrl+R` and chat control are mutually exclusive; reverse search activation is swallowed while chat control is on.
+     - Reverse search now toggles closed on repeated `Ctrl+R`, with explicit handling to avoid shortcut routing issues.
+     - One-time completion popup suppression is applied for initial autofill so Enter send is not interrupted.
+
+3. **Channel Points Popup / Queueing**
+   - **Feature**: Split-scoped popup for Twitch channel point rewards, opened from the split header or hotkey, backed by a local websocket service (`localhost:8765`) rather than Twitch directly.
+   - **Files Added**:
+     - `src/controllers/channelpoints/ChannelPointsModels.hpp` - Local DTO/view-state structs for rewards, cooldown/limit metadata, and popup rendering state.
+     - `src/controllers/channelpoints/ChannelPointsClient.hpp/.cpp` - Websocket payload builder/parser for `replace_subscriptions`, `get_channel_points`, `get_rewards`, and `redeem`.
+     - `src/controllers/channelpoints/ChannelPointsController.hpp/.cpp` - Application-owned controller managing connection lifecycle, per-channel state, queue modes, throttling, and reward event handling.
+     - `src/widgets/splits/ChannelPointsPopup.hpp/.cpp` - Popup UI showing balance, rewards, queue state, favorites, and controls.
+     - `src/widgets/splits/ChannelPointsConfirmDialog.hpp/.cpp` - Confirm dialog shown before manual redeem with Shift-to-keep-open behavior.
+   - **Files Modified**:
+     - `src/Application.hpp/.cpp` - Added `ChannelPointsController` singleton initialization and `getChannelPoints()` accessor.
+     - `src/widgets/splits/Split.hpp/.cpp` - Added `openChannelPointsPopup()` and split hotkey action wiring.
+     - `src/widgets/splits/SplitHeader.hpp/.cpp` - Added split-header entry point for channel points.
+     - `src/controllers/hotkeys/ActionNames.hpp` - Added `showChannelPoints` action definition.
+     - `src/controllers/hotkeys/HotkeyController.cpp` - Added default `Ctrl+Alt+P` binding.
+     - `src/singletons/Settings.hpp` - Added persistent favorites storage for pinned rewards.
+     - `src/CMakeLists.txt` - Added channel-points controller and popup sources.
+     - `mocks/include/mocks/EmptyApplication.hpp` - Added mock accessor for `getChannelPoints()`.
+   - **Behavior Notes**:
+     - Popup is bound to the current Twitch split channel and only subscribes while visible; closing or hiding it unsubscribes from that channel.
+     - UI includes current point balance, manual redeem with confirm dialog, queue-once mode, repeat mode, emergency clear, and per-reward pin/favorite support.
+     - Manual confirm supports Shift to keep the popup open after redeem.
+     - Queue logic lives in the controller with one in-flight redeem per reward, 3-second minimum repeat interval, and deduped one-shot arming.
+     - Success sound is played only after a confirmed successful `redeem_result`.
+     - Popup refresh is local/timer-driven for cooldown expiry so rewards can unlock without requiring a full websocket snapshot refresh.
+     - External reward-redemption events only force a snapshot refresh for rewards with global limits/cooldowns; ordinary user redeems are otherwise ignored for UI refresh.
 

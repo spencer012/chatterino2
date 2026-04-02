@@ -328,6 +328,9 @@ void SplitHeader::initializeLayout()
             .light = ":/buttons/chatters-lightMode.svg",
         },
         this, {4, 4});
+    this->channelPointsButton_ = new LabelButton("PTS", this);
+    this->channelPointsButton_->setPadding({4, 0});
+    this->channelPointsButton_->hide();
 
     this->pinButton_ = new SvgButton(
         {
@@ -385,6 +388,8 @@ void SplitHeader::initializeLayout()
         this->moderationButton_,
         // chatter list
         this->chattersButton_,
+        // channel points
+        this->channelPointsButton_,
         // dropdown
         this->dropdownButton_,
         // add split
@@ -427,6 +432,10 @@ void SplitHeader::initializeLayout()
     QObject::connect(this->chattersButton_, &Button::leftClicked, this,
                      [this]() {
                          this->split_->openChatterList();
+                     });
+    QObject::connect(this->channelPointsButton_, &Button::leftClicked, this,
+                     [this]() {
+                         this->split_->openChannelPointsPopup();
                      });
 
     QObject::connect(this->pinButton_, &Button::leftClicked, this, [this]() {
@@ -489,6 +498,10 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
 
     if (twitchChannel)
     {
+        menu->addAction("Channel points",
+                        h->getDisplaySequence(HotkeyCategory::Split,
+                                              "showChannelPoints"),
+                        this->split_, &Split::openChannelPointsPopup);
         menu->addAction(
             OPEN_IN_BROWSER,
             h->getDisplaySequence(HotkeyCategory::Split, "openInBrowser"),
@@ -1067,11 +1080,14 @@ void SplitHeader::updateIcons()
         {
             this->chattersButton_->hide();
         }
+
+        this->channelPointsButton_->show();
     }
     else
     {
         this->moderationButton_->hide();
         this->chattersButton_->hide();
+        this->channelPointsButton_->hide();
     }
 }
 

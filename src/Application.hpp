@@ -66,6 +66,7 @@ class IController;
 }  // namespace eventsub
 class SpellChecker;
 class ChatHistoryManager;
+class ChannelPointsController;
 
 class IApplication
 {
@@ -122,6 +123,7 @@ public:
     virtual eventsub::IController *getEventSub() = 0;
     virtual SpellChecker *getSpellChecker() = 0;
     virtual ChatHistoryManager *getChatHistoryManager() = 0;
+    virtual ChannelPointsController *getChannelPoints() = 0;
 };
 
 class Application : public IApplication
@@ -192,6 +194,7 @@ private:
     std::unique_ptr<pronouns::Pronouns> pronouns;
     std::unique_ptr<SpellChecker> spellChecker;
     std::unique_ptr<ChatHistoryManager> chatHistoryManager;
+    std::unique_ptr<ChannelPointsController> channelPoints;
 #ifdef CHATTERINO_HAVE_PLUGINS
     std::unique_ptr<PluginController> plugins;
 #endif
@@ -247,6 +250,7 @@ public:
     ITwitchUsers *getTwitchUsers() override;
     SpellChecker *getSpellChecker() override;
     ChatHistoryManager *getChatHistoryManager() override;
+    ChannelPointsController *getChannelPoints() override;
 
 private:
     void initNm(const Modes &modes, const Paths &paths);

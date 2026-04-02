@@ -773,6 +773,8 @@ public:
                                                true};
     BoolSetting lockNotebookLayout = {"/misc/lockNotebookLayout", false};
     BoolSetting showPronouns = {"/misc/showPronouns", false};
+    ChatterinoSetting<std::vector<QString>> channelPointFavorites = {
+        "/misc/channelPoints/favorites", {}};
     BoolSetting showTitleInLiveMessage = {
         "/extraChannels/live/showTitle",
         false,
