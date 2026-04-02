@@ -184,6 +184,7 @@ inline const std::map<HotkeyCategory, ActionDefinitionMap> actionNames{
                   "Should the moderation mode be enabled, disabled or toggled",
           }},
          {"showSearch", ActionDefinition{"Search current channel"}},
+         {"showChannelPoints", ActionDefinition{"Open channel points popup"}},
          {"showGlobalSearch", ActionDefinition{"Search all channels"}},
          {"debug", ActionDefinition{"Show debug popup"}},
          {"popupOverlay", ActionDefinition{"New overlay popup"}},
