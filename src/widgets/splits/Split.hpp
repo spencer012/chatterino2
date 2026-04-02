@@ -26,6 +26,7 @@ class SplitOverlay;
 class PinnedMessageWidget;
 class SelectChannelDialog;
 class OverlayWindow;
+class ChannelPointsPopup;
 
 struct SplitDescriptor;
 
@@ -181,6 +182,7 @@ private:
     QPointer<OverlayWindow> overlayWindow_;
 
     QPointer<SelectChannelDialog> selectChannelDialog_;
+    QPointer<ChannelPointsPopup> channelPointsPopup_;
 
     pajlada::Signals::Connection channelIDChangedConnection_;
     pajlada::Signals::Connection usermodeChangedConnection_;
@@ -211,6 +213,7 @@ public Q_SLOTS:
     void openWithCustomScheme();
     void setFiltersDialog();
     void showSearch(bool singleChannel);
+    void openChannelPointsPopup();
     void openChatterList();
     void openSubPage();
     void reconnect();
