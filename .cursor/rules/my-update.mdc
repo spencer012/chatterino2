@@ -75,3 +75,17 @@ This is a fork of an existing open source project with some custom functionality
      - Popup refresh is local/timer-driven for cooldown expiry so rewards can unlock without requiring a full websocket snapshot refresh.
      - External reward-redemption events only force a snapshot refresh for rewards with global limits/cooldowns; ordinary user redeems are otherwise ignored for UI refresh.
 
+4. **Over-Length Twitch Message Display**
+   - **Feature**: Incoming Twitch chat messages longer than Twitch's normal 500-character limit display the extra text instead of visually losing it. Characters after 500 are rendered as readable black text with a yellow background.
+   - **Files Modified**:
+     - `src/messages/MessageBuilder.hpp/.cpp` - Detects over-limit incoming message content, builds the first 500 characters normally, and appends the suffix as highlighted overflow text.
+     - `src/messages/MessageElement.hpp/.cpp` - Added optional per-text-element background color support.
+     - `src/messages/layouts/MessageLayoutElement.hpp/.cpp` - Paints optional text-element backgrounds behind highlighted overflow text.
+     - `src/providers/twitch/ChannelPointReward.hpp/.cpp` - Preserves redemption `user_input` from PubSub/EventSub payloads.
+     - `src/providers/twitch/TwitchChannel.cpp` - Uses PubSub/EventSub `user_input` to hydrate queued channel-point reward messages when it extends the IRC text.
+   - **Behavior Notes**:
+     - Full message text remains in `messageText` and `searchText`.
+     - Twitch emote parsing is preserved for the normal first 500 characters; the overflow suffix is rendered as plain highlighted text so the hidden payload remains readable.
+     - Splits in the middle of a word avoid inserting an artificial space at the 500-character boundary.
+     - Custom reward input normally enters as a `PRIVMSG` with `custom-reward-id`; PubSub/EventSub provides a richer redemption object with `user_input`, which can contain text not visible in the IRC payload.
+
