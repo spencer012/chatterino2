@@ -10,6 +10,10 @@
 #include "singletons/WindowManager.hpp"
 
 #include <QDebug>
+#include <QDir>
+#include <QFontDatabase>
+#include <QSettings>
+#include <QStringList>
 #include <QtGlobal>
 
 namespace {
@@ -174,6 +178,113 @@ QString fontFamily(FontStyle style)
     return QStringLiteral(DEFAULT_FONT_FAMILY);
 }
 
+#ifdef Q_OS_WIN
+QString windowsFontPath(const QString &valueName)
+{
+    const auto fontPathFromRegistry = [&](const QString &key) {
+        QSettings fonts(key, QSettings::NativeFormat);
+        return fonts.value(valueName).toString();
+    };
+
+    auto path = fontPathFromRegistry(
+        QStringLiteral("HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"));
+    if (path.isEmpty())
+    {
+        path = fontPathFromRegistry(
+            QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"));
+    }
+
+    if (path.isEmpty() || QDir::isAbsolutePath(path))
+    {
+        return path;
+    }
+
+    return QDir(QStringLiteral("C:/Windows/Fonts")).filePath(path);
+}
+#endif
+
+QString installedFontFamily(const QString &familyName,
+                            const QString &windowsRegistryName)
+{
+    if (QFontDatabase::families().contains(familyName, Qt::CaseInsensitive))
+    {
+        return familyName;
+    }
+
+#ifdef Q_OS_WIN
+    const auto path = windowsFontPath(windowsRegistryName);
+    if (!path.isEmpty())
+    {
+        const auto id = QFontDatabase::addApplicationFont(path);
+        if (id != -1)
+        {
+            const auto families = QFontDatabase::applicationFontFamilies(id);
+            if (!families.isEmpty())
+            {
+                return families.front();
+            }
+        }
+    }
+#else
+    (void)windowsRegistryName;
+#endif
+
+    return familyName;
+}
+
+QStringList chatFallbackFamilies()
+{
+    static const auto families = [] {
+        QStringList result;
+        result.append(installedFontFamily(QStringLiteral("Gadugi"),
+                                          QStringLiteral("Gadugi (TrueType)")));
+        result.append(installedFontFamily(
+            QStringLiteral("FreeSerif"), QStringLiteral("FreeSerif (TrueType)")));
+        return result;
+    }();
+
+    return families;
+}
+
+bool usesChatFont(FontStyle style)
+{
+    switch (style)
+    {
+        case FontStyle::ChatSmall:
+        case FontStyle::ChatMediumSmall:
+        case FontStyle::ChatMedium:
+        case FontStyle::ChatMediumBold:
+        case FontStyle::ChatMediumItalic:
+        case FontStyle::ChatLarge:
+        case FontStyle::ChatVeryLarge:
+            return true;
+
+        case FontStyle::Tiny:
+        case FontStyle::TimestampMedium:
+        case FontStyle::UiMedium:
+        case FontStyle::UiMediumBold:
+        case FontStyle::UiTabs:
+        case FontStyle::EndType:
+            return false;
+    }
+
+    assert(false);
+    return false;
+}
+
+void applyChatFallbackFonts(QFont &font)
+{
+    auto families = font.families();
+    for (const auto &fallback : chatFallbackFamilies())
+    {
+        if (!families.contains(fallback, Qt::CaseInsensitive))
+        {
+            families.append(fallback);
+        }
+    }
+    font.setFamilies(families);
+}
+
 }  // namespace
 
 namespace chatterino {
@@ -270,7 +381,13 @@ Fonts::FontData Fonts::createFontData(FontStyle type, float scale)
     QWidget w;
     w.setFont(font);
 
-    return w.font();
+    auto resolvedFont = w.font();
+    if (usesChatFont(type))
+    {
+        applyChatFallbackFonts(resolvedFont);
+    }
+
+    return resolvedFont;
 }
 
 }  // namespace chatterino
