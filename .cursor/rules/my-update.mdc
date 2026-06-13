@@ -70,6 +70,7 @@ This is a fork of an existing open source project with some custom functionality
      - Popup is bound to the current Twitch split channel and only subscribes while visible; closing or hiding it unsubscribes from that channel.
      - UI includes current point balance, manual redeem with confirm dialog, queue-once mode, repeat mode, emergency clear, and per-reward pin/favorite support.
      - Manual confirm supports Shift to keep the popup open after redeem.
+     - Confirm-dialog input highlights characters past Twitch's 500-character soft limit with yellow foreground text and a live over-limit counter.
      - Queue logic lives in the controller with one in-flight redeem per reward, 3-second minimum repeat interval, and deduped one-shot arming.
      - Success sound is played only after a confirmed successful `redeem_result`.
      - Popup refresh is local/timer-driven for cooldown expiry so rewards can unlock without requiring a full websocket snapshot refresh.
@@ -88,4 +89,14 @@ This is a fork of an existing open source project with some custom functionality
      - Twitch emote parsing is preserved for the normal first 500 characters; the overflow suffix is rendered as plain highlighted text so the hidden payload remains readable.
      - Splits in the middle of a word avoid inserting an artificial space at the 500-character boundary.
      - Custom reward input normally enters as a `PRIVMSG` with `custom-reward-id`; PubSub/EventSub provides a richer redemption object with `user_input`, which can contain text not visible in the IRC payload.
+
+5. **Chat Font Fallbacks for Special Characters**
+   - **Feature**: Chat text uses explicit fallback families so special characters not covered by the selected chat font can still render.
+   - **Files Modified**:
+     - `src/singletons/Fonts.cpp` - Appends globally installed fallback families to chat font family lists after Chatterino normalizes the selected font.
+   - **Behavior Notes**:
+     - Applies only to chat-style fonts (`ChatSmall` through `ChatVeryLarge`), covering message text, usernames, and split input without changing UI fonts.
+     - `Gadugi` is included for Canadian Aboriginal Syllabics such as `ᗍᐈᐈᐈᐈ`, which FreeSerif does not cover.
+     - `FreeSerif` remains included for other special characters.
+     - If Qt does not already see a fallback family, the Windows font registry is used to load the installed font file with `QFontDatabase::addApplicationFont()`.
 
