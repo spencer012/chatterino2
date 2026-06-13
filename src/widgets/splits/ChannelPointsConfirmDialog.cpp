@@ -11,14 +11,48 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPushButton>
+#include <QSyntaxHighlighter>
+#include <QTextBlock>
 #include <QTextCharFormat>
-#include <QTextCursor>
 #include <QTextEdit>
 #include <QVBoxLayout>
 
 namespace {
 
 constexpr int REDEEM_INPUT_SOFT_LIMIT = 500;
+
+class RedeemInputHighlighter final : public QSyntaxHighlighter
+{
+public:
+    explicit RedeemInputHighlighter(QTextDocument *document)
+        : QSyntaxHighlighter(document)
+    {
+        this->overLimitFormat_.setForeground(QColor("#fff59d"));
+    }
+
+protected:
+    void highlightBlock(const QString &text) override
+    {
+        const auto blockStart = this->currentBlock().position();
+        const auto overLimitStart =
+            std::max(0, REDEEM_INPUT_SOFT_LIMIT - blockStart);
+
+        if (blockStart >= REDEEM_INPUT_SOFT_LIMIT)
+        {
+            this->setFormat(0, text.size(), this->overLimitFormat_);
+            return;
+        }
+
+        if (overLimitStart < text.size())
+        {
+            this->setFormat(overLimitStart, text.size() - overLimitStart,
+                            this->overLimitFormat_);
+        }
+    }
+
+private:
+    QTextCharFormat overLimitFormat_;
+};
 
 }  // namespace
 
@@ -86,6 +120,7 @@ ChannelPointsConfirmDialog::ChannelPointsConfirmDialog(
         this->inputEdit_->setAcceptRichText(false);
         this->inputEdit_->setMinimumHeight(120);
         this->inputEdit_->setTabChangesFocus(true);
+        new RedeemInputHighlighter(this->inputEdit_->document());
         QObject::connect(this->inputEdit_, &QTextEdit::textChanged, this,
                          [this] {
                              this->updateConfirmEnabled();
@@ -174,22 +209,6 @@ void ChannelPointsConfirmDialog::updateInputHighlights()
     }
 
     const auto text = this->inputEdit_->toPlainText();
-
-    QList<QTextEdit::ExtraSelection> selections;
-    if (text.size() > REDEEM_INPUT_SOFT_LIMIT)
-    {
-        QTextEdit::ExtraSelection overLimit;
-        QTextCursor cursor(this->inputEdit_->document());
-        QTextCharFormat format;
-        format.setBackground(QColor("#fff59d"));
-        format.setForeground(Qt::black);
-        cursor.setPosition(REDEEM_INPUT_SOFT_LIMIT, QTextCursor::MoveAnchor);
-        cursor.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
-        overLimit.cursor = cursor;
-        overLimit.format = format;
-        selections.append(overLimit);
-    }
-    this->inputEdit_->setExtraSelections(selections);
 
     if (this->inputLengthLabel_ == nullptr)
     {
