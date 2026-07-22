@@ -287,6 +287,8 @@ inline const std::map<HotkeyCategory, ActionDefinitionMap> actionNames{
                   },
               .argumentsPrompt = "Direction:",
           }},
+         {"openMessageHistory",
+          ActionDefinition{"Search message history (reverse search)"}},
 
      }},
     {HotkeyCategory::Window,
