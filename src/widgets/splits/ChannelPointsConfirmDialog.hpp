@@ -9,6 +9,7 @@
 
 class QLabel;
 class QPushButton;
+class QTextEdit;
 
 namespace chatterino {
 
@@ -19,18 +20,26 @@ class ChannelPointsConfirmDialog : public BasePopup
 public:
     ChannelPointsConfirmDialog(const QString &channelLogin,
                                const ChannelPointRewardData &reward,
+                               ChannelPointQueueMode action,
                                QWidget *parent = nullptr);
 
 Q_SIGNALS:
-    void confirmed(bool keepDialogOpen);
+    void confirmed(ChannelPointQueueMode action, bool keepDialogOpen,
+                   const QString &inputText);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
 
 private:
     void confirm();
+    void updateConfirmEnabled();
+    void updateInputHighlights();
 
+    ChannelPointQueueMode action_{ChannelPointQueueMode::None};
+    bool requiresInput_{false};
     QLabel *descriptionLabel_{};
+    QLabel *inputLengthLabel_{};
+    QTextEdit *inputEdit_{};
     QPushButton *confirmButton_{};
     QPushButton *cancelButton_{};
 };

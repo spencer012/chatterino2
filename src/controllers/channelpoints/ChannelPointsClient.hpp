@@ -49,6 +49,7 @@ public:
     static QByteArray buildRedeemRequest(const QString &requestId,
                                          const QString &channelLogin,
                                          const ChannelPointRewardData &reward,
+                                         const QString &redeemInput,
                                          const QString &transactionId);
 
     static std::optional<ParsedMessage> parseMessage(const QByteArray &payload,

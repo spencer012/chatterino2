@@ -151,6 +151,7 @@ void ChannelPointsController::unwatchChannel(const QString &channelLogin)
             it->queueMode = ChannelPointQueueMode::None;
             it->inFlight = false;
             it->inFlightTransactionId.clear();
+            it->queuedInput.clear();
             it->lastResult = "Inactive";
         }
         mutableChannel.subscribed = false;
@@ -245,7 +246,8 @@ ChannelPointsViewState ChannelPointsController::getViewState(
 }
 
 bool ChannelPointsController::redeemReward(const QString &channelLogin,
-                                           const ChannelPointRewardData &reward)
+                                           const ChannelPointRewardData &reward,
+                                           const QString &redeemInput)
 {
     auto *runtimeReward = this->findReward(channelLogin, reward.id);
     if (!runtimeReward)
@@ -254,11 +256,14 @@ bool ChannelPointsController::redeemReward(const QString &channelLogin,
     }
 
     runtimeReward->queueMode = ChannelPointQueueMode::None;
-    return this->tryRedeem(channelLogin.trimmed().toLower(), *runtimeReward, true);
+    runtimeReward->queuedInput.clear();
+    return this->tryRedeem(channelLogin.trimmed().toLower(), *runtimeReward, true,
+                           redeemInput);
 }
 
 bool ChannelPointsController::armQueueOnce(const QString &channelLogin,
-                                           const QString &rewardId)
+                                           const QString &rewardId,
+                                           const QString &redeemInput)
 {
     auto login = channelLogin.trimmed().toLower();
     auto *channel = this->findChannel(login);
@@ -277,12 +282,14 @@ bool ChannelPointsController::armQueueOnce(const QString &channelLogin,
     if (reward->queueMode == ChannelPointQueueMode::Once)
     {
         reward->queueMode = ChannelPointQueueMode::None;
+        reward->queuedInput.clear();
         reward->lastResult = "Stopped";
     }
     else
     {
         reward->queueMode = ChannelPointQueueMode::Once;
         reward->queuedOnceGeneration++;
+        reward->queuedInput = redeemInput;
         reward->lastResult = "Once";
     }
 
@@ -292,7 +299,8 @@ bool ChannelPointsController::armQueueOnce(const QString &channelLogin,
 
 bool ChannelPointsController::setRepeatMode(const QString &channelLogin,
                                             const QString &rewardId,
-                                            bool enabled)
+                                            bool enabled,
+                                            const QString &redeemInput)
 {
     auto login = channelLogin.trimmed().toLower();
     auto *channel = this->findChannel(login);
@@ -310,6 +318,7 @@ bool ChannelPointsController::setRepeatMode(const QString &channelLogin,
 
     reward->queueMode = enabled ? ChannelPointQueueMode::Repeat
                                 : ChannelPointQueueMode::None;
+    reward->queuedInput = enabled ? redeemInput : QString();
     reward->lastResult = enabled ? "Loop" : "Stopped";
     this->emitChannelState(login);
     return true;
@@ -329,6 +338,7 @@ void ChannelPointsController::clearQueue(const QString &channelLogin)
          ++it)
     {
         it->queueMode = ChannelPointQueueMode::None;
+        it->queuedInput.clear();
         if (!it->inFlight)
         {
             it->lastResult = "Cleared";
@@ -700,6 +710,7 @@ void ChannelPointsController::handleRedeemResult(
         if (reward->queueMode == ChannelPointQueueMode::Once)
         {
             reward->queueMode = ChannelPointQueueMode::None;
+            reward->queuedInput.clear();
         }
 
         getApp()->getSound()->play(successSoundUrl());
@@ -842,7 +853,8 @@ void ChannelPointsController::tickQueue()
 }
 
 bool ChannelPointsController::tryRedeem(const QString &channelLogin,
-                                        RewardRuntime &reward, bool manual)
+                                        RewardRuntime &reward, bool manual,
+                                        const QString &manualInput)
 {
     auto *channel = this->findChannel(channelLogin);
     if (!channel || reward.inFlight)
@@ -865,6 +877,7 @@ bool ChannelPointsController::tryRedeem(const QString &channelLogin,
     reward.lastAttemptAt = now;
     reward.lastResult = "Sending";
     reward.inFlightTransactionId = this->nextTransactionId();
+    const auto redeemInput = manual ? manualInput : reward.queuedInput;
 
     auto requestId = this->nextRequestId();
     this->pendingRequests_.insert(
@@ -876,7 +889,8 @@ bool ChannelPointsController::tryRedeem(const QString &channelLogin,
             .transactionId = reward.inFlightTransactionId,
         });
     this->socket_.sendText(ChannelPointsClient::buildRedeemRequest(
-        requestId, channelLogin, reward.reward, reward.inFlightTransactionId));
+        requestId, channelLogin, reward.reward, redeemInput,
+        reward.inFlightTransactionId));
     this->emitChannelState(channelLogin);
     return true;
 }
@@ -901,6 +915,13 @@ bool ChannelPointsController::canAttemptRedeem(const ChannelRuntime &channel,
     }
 
     if (channel.hasBalance && channel.balance < reward.reward.cost)
+    {
+        return false;
+    }
+
+    if (reward.reward.isUserInputRequired &&
+        reward.queueMode != ChannelPointQueueMode::None &&
+        reward.queuedInput.trimmed().isEmpty())
     {
         return false;
     }
