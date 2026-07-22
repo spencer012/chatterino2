@@ -214,6 +214,11 @@ public:
         return nullptr;
     }
 
+    ChatHistoryManager *getChatHistoryManager() override
+    {
+        return nullptr;
+    }
+
 #ifdef CHATTERINO_HAVE_PLUGINS
     PluginController *getPlugins() override
     {

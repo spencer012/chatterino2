@@ -27,6 +27,7 @@ class Split;
 class EmotePopup;
 class InputCompletionPopup;
 class InputHighlighter;
+class MessageHistoryPopup;
 class MessageView;
 class LabelButton;
 class ResizingTextEdit;
@@ -154,6 +155,7 @@ protected:
     ChannelView *const channelView_;
     QPointer<EmotePopup> emotePopup_;
     QPointer<InputCompletionPopup> inputCompletionPopup_;
+    QPointer<MessageHistoryPopup> messageHistoryPopup_;
 
     struct {
         // vbox for all components
@@ -187,6 +189,14 @@ protected:
     QStringList prevMsg_;
     QString currMsg_;
     int prevIndex_ = 0;
+
+    /// History search mode (Ctrl+R)
+    bool historySearchMode_{false};
+
+    void openMessageHistory();
+    void exitHistorySearch(bool restoreText);
+    void updateHistoryPopup();
+    void hideHistoryPopup();
 
     // Hidden denotes whether this split input should be hidden or not
     // This is used instead of the regular QWidget::hide/show because
