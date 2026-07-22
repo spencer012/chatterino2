@@ -36,10 +36,12 @@ public:
         const QString &channelLogin) const;
 
     bool redeemReward(const QString &channelLogin,
-                      const ChannelPointRewardData &reward);
-    bool armQueueOnce(const QString &channelLogin, const QString &rewardId);
+                      const ChannelPointRewardData &reward,
+                      const QString &redeemInput = {});
+    bool armQueueOnce(const QString &channelLogin, const QString &rewardId,
+                      const QString &redeemInput = {});
     bool setRepeatMode(const QString &channelLogin, const QString &rewardId,
-                       bool enabled);
+                       bool enabled, const QString &redeemInput = {});
     void clearQueue(const QString &channelLogin);
 
 Q_SIGNALS:
@@ -53,6 +55,7 @@ private:
         qint64 lastAttemptAt = 0;
         quint64 queuedOnceGeneration = 0;
         QString inFlightTransactionId;
+        QString queuedInput;
         QString lastResult;
     };
 
@@ -122,7 +125,7 @@ private:
 
     void tickQueue();
     bool tryRedeem(const QString &channelLogin, RewardRuntime &reward,
-                   bool manual);
+                   bool manual, const QString &manualInput = {});
     bool canAttemptRedeem(const ChannelRuntime &channel,
                           const RewardRuntime &reward) const;
     void updateRewardSnapshot(ChannelRuntime &channel,
