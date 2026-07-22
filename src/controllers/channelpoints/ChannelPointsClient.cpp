@@ -138,7 +138,8 @@ QByteArray ChannelPointsClient::buildGetChannelPointsRequest(
 
 QByteArray ChannelPointsClient::buildRedeemRequest(
     const QString &requestId, const QString &channelLogin,
-    const ChannelPointRewardData &reward, const QString &transactionId)
+    const ChannelPointRewardData &reward, const QString &redeemInput,
+    const QString &transactionId)
 {
     QJsonObject payload{
         {"action", "redeem"},
@@ -147,7 +148,7 @@ QByteArray ChannelPointsClient::buildRedeemRequest(
         {"rewardId", reward.id},
         {"title", reward.title},
         {"cost", reward.cost},
-        {"prompt", reward.prompt},
+        {"prompt", redeemInput},
     };
 
     if (!transactionId.isEmpty())

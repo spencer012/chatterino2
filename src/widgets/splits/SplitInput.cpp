@@ -97,6 +97,34 @@ protected:
     }
 };
 
+QString historyChannelId(const ChannelPtr &channel)
+{
+    if (!channel)
+    {
+        qCDebug(chatterinoWidget)
+            << "historyChannelId - null channel";
+        return {};
+    }
+
+    if (channel->isTwitchChannel())
+    {
+        auto id = QString("twitch:%1").arg(channel->getName());
+        qCDebug(chatterinoWidget)
+            << "historyChannelId - twitch channel"
+            << "type:" << magic_enum::enum_name(channel->getType()).data()
+            << "name:" << channel->getName()
+            << "display:" << channel->getDisplayName()
+            << "id:" << id;
+        return id;
+    }
+
+    qCDebug(chatterinoWidget)
+        << "historyChannelId - non-twitch channel"
+        << "type:" << magic_enum::enum_name(channel->getType()).data()
+        << "name:" << channel->getName();
+    return channel->getName();
+}
+
 }  // namespace
 
 SplitInput::SplitInput(Split *_chatWidget, bool enableInlineReplying)
@@ -597,10 +625,7 @@ void SplitInput::postMessageSend(const QString &message,
         auto channel = this->split_->getChannel();
         if (channel)
         {
-            QString channelId =
-                channel->getType() == Channel::Type::Twitch
-                    ? QString("twitch:%1").arg(channel->getName())
-                    : channel->getName();
+            QString channelId = historyChannelId(channel);
 
             auto *app = getApp();
             if (app)
@@ -610,7 +635,8 @@ void SplitInput::postMessageSend(const QString &message,
                 {
                     historyManager->addMessage(channelId, message);
                     qCDebug(chatterinoWidget)
-                        << "Added message to history for channel" << channelId;
+                        << "Added message to history for channel" << channelId
+                        << "message:" << message.left(120);
                 }
             }
         }
@@ -913,12 +939,17 @@ void SplitInput::addShortcuts()
          [this](const std::vector<QString> &arguments) -> QString {
              (void)arguments;
 
+             qCDebug(chatterinoWidget)
+                 << "openMessageHistory action triggered"
+                 << "crowdCopyEnabled:" << this->crowdCopyEnabled_
+                 << "historySearchMode:" << this->historySearchMode_;
+
              if (this->crowdCopyEnabled_)
              {
+                 qCDebug(chatterinoWidget)
+                     << "openMessageHistory action blocked by Crowd Copy mode";
                  return "";
              }
-
-             qCDebug(chatterinoWidget) << "openMessageHistory action triggered";
 
              if (this->historySearchMode_)
              {
@@ -1318,10 +1349,11 @@ void SplitInput::openMessageHistory()
     auto *popup = this->messageHistoryPopup_.data();
 
     // Get channel identifier
-    QString channelId =
-        channel->getType() == Channel::Type::Twitch
-            ? QString("twitch:%1").arg(channel->getName())
-            : channel->getName();
+    QString channelId = historyChannelId(channel);
+    qCDebug(chatterinoWidget)
+        << "openMessageHistory - resolved channelId:" << channelId
+        << "raw name:" << channel->getName()
+        << "type:" << magic_enum::enum_name(channel->getType()).data();
 
     // Get history from ChatHistoryManager
     auto *app = getApp();
@@ -1400,10 +1432,11 @@ void SplitInput::updateHistoryPopup()
         return;
     }
 
-    QString channelId =
-        channel->getType() == Channel::Type::Twitch
-            ? QString("twitch:%1").arg(channel->getName())
-            : channel->getName();
+    QString channelId = historyChannelId(channel);
+    qCDebug(chatterinoWidget)
+        << "updateHistoryPopup - resolved channelId:" << channelId
+        << "raw name:" << channel->getName()
+        << "type:" << magic_enum::enum_name(channel->getType()).data();
 
     QString searchText = this->ui_.textEdit->toPlainText();
 

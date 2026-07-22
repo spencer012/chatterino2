@@ -59,6 +59,9 @@ public:
     void load();
 
 private:
+    static QString normalizeChannelName(const QString &channelName);
+    bool loadFromFile(const QString &filePath);
+
     /// Channel name -> list of messages (most recent last)
     QHash<QString, QStringList> history_;
 

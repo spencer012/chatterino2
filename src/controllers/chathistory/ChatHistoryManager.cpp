@@ -21,6 +21,8 @@ namespace chatterino {
 ChatHistoryManager::ChatHistoryManager(const Paths &paths)
     : historyFilePath_(combinePath(paths.miscDirectory, "chat-history.json"))
 {
+    qCDebug(chatterinoApp)
+        << "ChatHistoryManager primary history path:" << this->historyFilePath_;
     this->load();
 
     // Set up periodic save timer (every 60 seconds)
@@ -36,17 +38,48 @@ ChatHistoryManager::~ChatHistoryManager()
     this->save();
 }
 
+QString ChatHistoryManager::normalizeChannelName(const QString &channelName)
+{
+    auto key = channelName.trimmed();
+    if (key.isEmpty())
+    {
+        return {};
+    }
+
+    auto colonIndex = key.indexOf(':');
+    if (colonIndex != -1)
+    {
+        auto platform = key.left(colonIndex).toLower();
+        auto channel = key.mid(colonIndex + 1).trimmed();
+        if (channel.startsWith('#'))
+        {
+            channel.remove(0, 1);
+        }
+        return platform + ':' + channel.toLower();
+    }
+
+    if (key.startsWith('#'))
+    {
+        key.remove(0, 1);
+    }
+    return key.toLower();
+}
+
 void ChatHistoryManager::addMessage(const QString &channelName,
                                     const QString &message)
 {
-    if (channelName.isEmpty() || message.trimmed().isEmpty())
+    auto normalizedChannelName = normalizeChannelName(channelName);
+    qCDebug(chatterinoApp)
+        << "ChatHistoryManager::addMessage - raw channel:" << channelName
+        << "normalized:" << normalizedChannelName;
+    if (normalizedChannelName.isEmpty() || message.trimmed().isEmpty())
     {
         qCDebug(chatterinoApp)
             << "ChatHistoryManager::addMessage - empty channel or message";
         return;
     }
 
-    auto &messages = this->history_[channelName];
+    auto &messages = this->history_[normalizedChannelName];
 
     // Don't add consecutive duplicates
     if (!messages.isEmpty() && messages.last() == message)
@@ -58,7 +91,7 @@ void ChatHistoryManager::addMessage(const QString &channelName,
 
     messages.append(message);
     qCDebug(chatterinoApp) << "ChatHistoryManager::addMessage - added message"
-                           << "to channel" << channelName << ", total:"
+                           << "to channel" << normalizedChannelName << ", total:"
                            << messages.size();
 
     // Enforce maximum history size
@@ -83,21 +116,37 @@ void ChatHistoryManager::addMessage(const QString &channelName,
 
 QStringList ChatHistoryManager::getMessages(const QString &channelName) const
 {
-    auto messages = this->history_.value(channelName);
+    auto normalizedChannelName = normalizeChannelName(channelName);
+    auto messages = this->history_.value(normalizedChannelName);
     qCDebug(chatterinoApp) << "ChatHistoryManager::getMessages - channel:"
-                           << channelName << "returning" << messages.size()
+                           << channelName << "normalized:" << normalizedChannelName
+                           << "returning" << messages.size()
                            << "messages";
+    if (messages.isEmpty())
+    {
+        qCDebug(chatterinoApp)
+            << "ChatHistoryManager::getMessages - available channels:"
+            << this->history_.keys();
+    }
     return messages;
 }
 
 QStringList ChatHistoryManager::getFiltered(const QString &channelName,
                                             const QString &searchText) const
 {
-    const auto &messages = this->history_.value(channelName);
+    auto normalizedChannelName = normalizeChannelName(channelName);
+    const auto &messages = this->history_.value(normalizedChannelName);
 
     qCDebug(chatterinoApp) << "ChatHistoryManager::getFiltered - channel:"
-                           << channelName << "searchText:" << searchText
+                           << channelName << "normalized:" << normalizedChannelName
+                           << "searchText:" << searchText
                            << "total messages:" << messages.size();
+    if (messages.isEmpty())
+    {
+        qCDebug(chatterinoApp)
+            << "ChatHistoryManager::getFiltered - available channels:"
+            << this->history_.keys();
+    }
 
     if (searchText.isEmpty())
     {
@@ -178,26 +227,50 @@ void ChatHistoryManager::save()
 
 void ChatHistoryManager::load()
 {
-    QFile file(this->historyFilePath_);
+    this->history_.clear();
+
+    qCDebug(chatterinoApp)
+        << "ChatHistoryManager::load - loading from:" << this->historyFilePath_;
+
+    auto loaded = this->loadFromFile(this->historyFilePath_);
+
+    if (!loaded)
+    {
+        qCDebug(chatterinoApp)
+            << "No chat history loaded. Primary path:" << this->historyFilePath_;
+    }
+
+    qCDebug(chatterinoApp)
+        << "Loaded chat history for" << this->history_.size() << "channels";
+}
+
+bool ChatHistoryManager::loadFromFile(const QString &filePath)
+{
+    QFile file(filePath);
     if (!file.exists())
     {
-        return;
+        qCDebug(chatterinoApp) << "Chat history file does not exist:" << filePath;
+        return false;
     }
+
+    qCDebug(chatterinoApp)
+        << "ChatHistoryManager::loadFromFile - file exists:" << filePath
+        << "size:" << file.size();
 
     if (!file.open(QIODevice::ReadOnly))
     {
         qCWarning(chatterinoApp)
             << "Failed to open chat history file for reading:"
-            << this->historyFilePath_;
-        return;
+            << filePath;
+        return false;
     }
 
     QByteArray data = file.readAll();
     QJsonDocument doc = QJsonDocument::fromJson(data);
     if (!doc.isObject())
     {
-        qCWarning(chatterinoApp) << "Invalid chat history file format";
-        return;
+        qCWarning(chatterinoApp) << "Invalid chat history file format:" << filePath;
+        return false;
     }
 
     QJsonObject root = doc.object();
@@ -205,13 +278,24 @@ void ChatHistoryManager::load()
     if (version != 1)
     {
         qCWarning(chatterinoApp)
-            << "Unknown chat history file version:" << version;
-        return;
+            << "Unknown chat history file version:" << version << "in" << filePath;
+        return false;
     }
 
+    qCDebug(chatterinoApp) << "Loading chat history from:" << filePath;
+
     QJsonObject channels = root["channels"].toObject();
+    qCDebug(chatterinoApp)
+        << "ChatHistoryManager::loadFromFile - raw channel count:"
+        << channels.size();
     for (auto it = channels.begin(); it != channels.end(); ++it)
     {
+        auto channelName = normalizeChannelName(it.key());
+        if (channelName.isEmpty())
+        {
+            continue;
+        }
+
         QStringList messages;
         QJsonArray messagesArray = it.value().toArray();
         for (const auto &msgVal : messagesArray)
@@ -229,14 +313,32 @@ void ChatHistoryManager::load()
             messages.removeFirst();
         }
 
-        this->history_[it.key()] = messages;
+        auto &existingMessages = this->history_[channelName];
+        if (existingMessages.isEmpty())
+        {
+            existingMessages = messages;
+        }
+        else
+        {
+            for (const auto &msg : messages)
+            {
+                if (existingMessages.isEmpty() || existingMessages.last() != msg)
+                {
+                    existingMessages.append(msg);
+                }
+            }
+            while (existingMessages.size() > MAX_HISTORY_PER_CHANNEL)
+            {
+                existingMessages.removeFirst();
+            }
+        }
+
         qCDebug(chatterinoApp)
             << "  Loaded" << messages.size() << "messages for channel:"
-            << it.key();
+            << channelName;
     }
 
-    qCDebug(chatterinoApp)
-        << "Loaded chat history for" << this->history_.size() << "channels";
+    return true;
 }
 
 }  // namespace chatterino
