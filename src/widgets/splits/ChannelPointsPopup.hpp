@@ -37,7 +37,8 @@ private:
     void rebuildRewardSection(const QString &title,
                               const QVector<ChannelPointRewardView> &rewards,
                               QVBoxLayout *layout);
-    void openConfirmDialog(const ChannelPointRewardData &reward);
+    void openConfirmDialog(const ChannelPointRewardData &reward,
+                           ChannelPointQueueMode action);
     void toggleFavorite(const QString &rewardId);
     void attachToController();
     void detachFromController();

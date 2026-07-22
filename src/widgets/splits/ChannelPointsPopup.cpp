@@ -51,21 +51,21 @@ QString formatConnectionState(const ChannelPointsViewState &state)
 {
     if (!state.transportConnected)
     {
-        return "Disconnected";
+        return "Offline";
     }
     if (!state.sessionReady)
     {
-        return "Connecting...";
+        return "Connecting";
     }
     if (!state.subscribed)
     {
-        return "Connected, waiting for subscription";
+        return "Subscribing";
     }
     if (state.loadingBalance || state.loadingRewards)
     {
-        return "Loading rewards...";
+        return "Loading";
     }
-    return "Connected";
+    return "Ready";
 }
 
 QString favoriteKey(const QString &channelLogin, const QString &rewardId)
@@ -77,17 +77,15 @@ QVector<ChannelPointRewardView> sortRewards(QString channelLogin,
                                             QVector<ChannelPointRewardView> rewards)
 {
     const auto favorites = getSettings()->channelPointFavorites.getValue();
+    const auto isFavorite = [&favorites, &channelLogin](const QString &rewardId) {
+        return std::find(favorites.begin(), favorites.end(),
+                         favoriteKey(channelLogin, rewardId)) != favorites.end();
+    };
+
     std::sort(rewards.begin(), rewards.end(),
-              [&favorites, channelLogin = std::move(channelLogin)](
-                  const auto &a, const auto &b) {
-                  const auto aFav =
-                      std::find(favorites.begin(), favorites.end(),
-                                favoriteKey(channelLogin, a.reward.id)) !=
-                      favorites.end();
-                  const auto bFav =
-                      std::find(favorites.begin(), favorites.end(),
-                                favoriteKey(channelLogin, b.reward.id)) !=
-                      favorites.end();
+              [&isFavorite](const auto &a, const auto &b) {
+                  const auto aFav = isFavorite(a.reward.id);
+                  const auto bFav = isFavorite(b.reward.id);
                   if (aFav != bFav)
                   {
                       return aFav > bFav;
@@ -100,10 +98,7 @@ QVector<ChannelPointRewardView> sortRewards(QString channelLogin,
               });
     for (auto &reward : rewards)
     {
-        reward.isFavorite =
-            std::find(favorites.begin(), favorites.end(),
-                      favoriteKey(channelLogin, reward.reward.id)) !=
-                            favorites.end();
+        reward.isFavorite = isFavorite(reward.reward.id);
     }
     return rewards;
 }
@@ -134,25 +129,33 @@ ChannelPointsPopup::ChannelPointsPopup(Split *split, QWidget *parent)
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(6);
 
-    this->connectionLabel_ =
-        root.emplace<QLabel>().assign(&this->connectionLabel_).getElement();
-    this->balanceLabel_ =
-        root.emplace<QLabel>().assign(&this->balanceLabel_).getElement();
-    this->statusLabel_ =
-        root.emplace<QLabel>().assign(&this->statusLabel_).getElement();
-    this->statusLabel_->setWordWrap(true);
+    auto *topRow = root.emplace<QHBoxLayout>().getElement();
+    topRow->setContentsMargins(0, 0, 0, 0);
+    topRow->setSpacing(6);
 
-    auto *buttonRow = root.emplace<QHBoxLayout>().getElement();
-    buttonRow->setContentsMargins(0, 0, 0, 0);
-    buttonRow->setSpacing(8);
+    auto makeTile = [this, topRow](QLabel **target) {
+        auto *label = new QLabel(this);
+        label->setFrameShape(QFrame::StyledPanel);
+        label->setMargin(4);
+        label->setMinimumWidth(72);
+        topRow->addWidget(label);
+        *target = label;
+    };
+
+    makeTile(&this->connectionLabel_);
+    makeTile(&this->balanceLabel_);
+    makeTile(&this->statusLabel_);
+    this->statusLabel_->setMinimumWidth(84);
 
     auto *refreshButton = new QPushButton("Sync", this);
     this->clearQueueButton_ = new QPushButton("Clear", this);
+    refreshButton->setMaximumWidth(54);
+    this->clearQueueButton_->setMaximumWidth(56);
     refreshButton->setToolTip("Refresh balance and rewards");
     this->clearQueueButton_->setToolTip("Emergency clear queue");
-    buttonRow->addWidget(refreshButton);
-    buttonRow->addWidget(this->clearQueueButton_);
-    buttonRow->addStretch(1);
+    topRow->addWidget(refreshButton);
+    topRow->addWidget(this->clearQueueButton_);
+    topRow->addStretch(1);
 
     QObject::connect(refreshButton, &QPushButton::clicked, this, [this] {
         if (!this->channelLogin_.isEmpty())
@@ -218,9 +221,9 @@ void ChannelPointsPopup::refresh()
     this->connectionLabel_->setText(formatConnectionState(state));
     if (state.hasBalance)
     {
-        auto claimSuffix = state.availableClaim ? " | Bonus claim ready" : "";
-        this->balanceLabel_->setText(QString("Pts %1%2").arg(state.balance).arg(
-            claimSuffix));
+        auto claimSuffix = state.availableClaim ? " +Claim" : "";
+        this->balanceLabel_->setText(
+            QString("Pts %1%2").arg(state.balance).arg(claimSuffix));
     }
     else
     {
@@ -228,7 +231,7 @@ void ChannelPointsPopup::refresh()
     }
 
     this->statusLabel_->setText(state.lastError.isEmpty()
-                                    ? QString("Queue %1")
+                                    ? QString("Q %1")
                                           .arg(state.queuedRewardCount)
                                     : state.lastError);
     this->clearQueueButton_->setEnabled(state.queuedRewardCount > 0);
@@ -280,9 +283,13 @@ void ChannelPointsPopup::rebuildRewardSection(
         headerRow->addWidget(titleLabel, 1);
 
         auto *favoriteButton =
-            new QPushButton(rewardView.isFavorite ? "Unpin" : "Pin", card);
-        favoriteButton->setToolTip("Pin this reward to the top");
-        favoriteButton->setMaximumWidth(52);
+            new QPushButton(rewardView.isFavorite ? "Pinned" : "Pin", card);
+        favoriteButton->setToolTip(rewardView.isFavorite
+                                       ? "Pinned to the top"
+                                       : "Pin this reward to the top");
+        favoriteButton->setCheckable(true);
+        favoriteButton->setChecked(rewardView.isFavorite);
+        favoriteButton->setMaximumWidth(58);
         headerRow->addWidget(favoriteButton, 0, Qt::AlignRight);
         cardLayout->addLayout(headerRow);
 
@@ -334,19 +341,48 @@ void ChannelPointsPopup::rebuildRewardSection(
 
         QObject::connect(redeemButton, &QPushButton::clicked, this,
                          [this, reward = rewardView.reward] {
-                             this->openConfirmDialog(reward);
+                             this->openConfirmDialog(
+                                 reward, ChannelPointQueueMode::None);
                          });
         QObject::connect(queueOnceButton, &QPushButton::clicked, this,
-                         [this, rewardId = rewardView.reward.id] {
+                         [this, reward = rewardView.reward,
+                          mode = rewardView.queueMode] {
+                             if (mode == ChannelPointQueueMode::Once)
+                             {
+                                 getApp()->getChannelPoints()->armQueueOnce(
+                                     this->channelLogin_, reward.id);
+                                 return;
+                             }
+
+                             if (reward.isUserInputRequired)
+                             {
+                                 this->openConfirmDialog(
+                                     reward, ChannelPointQueueMode::Once);
+                                 return;
+                             }
+
                              getApp()->getChannelPoints()->armQueueOnce(
-                                 this->channelLogin_, rewardId);
+                                 this->channelLogin_, reward.id);
                          });
         QObject::connect(repeatButton, &QPushButton::clicked, this,
-                         [this, rewardId = rewardView.reward.id,
-                          enabled = rewardView.queueMode !=
-                                    ChannelPointQueueMode::Repeat] {
+                         [this, reward = rewardView.reward,
+                          mode = rewardView.queueMode] {
+                             if (mode == ChannelPointQueueMode::Repeat)
+                             {
+                                 getApp()->getChannelPoints()->setRepeatMode(
+                                     this->channelLogin_, reward.id, false);
+                                 return;
+                             }
+
+                             if (reward.isUserInputRequired)
+                             {
+                                 this->openConfirmDialog(
+                                     reward, ChannelPointQueueMode::Repeat);
+                                 return;
+                             }
+
                              getApp()->getChannelPoints()->setRepeatMode(
-                                 this->channelLogin_, rewardId, enabled);
+                                 this->channelLogin_, reward.id, true);
                          });
         QObject::connect(favoriteButton, &QPushButton::clicked, this,
                          [this, rewardId = rewardView.reward.id] {
@@ -357,20 +393,39 @@ void ChannelPointsPopup::rebuildRewardSection(
     }
 }
 
-void ChannelPointsPopup::openConfirmDialog(const ChannelPointRewardData &reward)
+void ChannelPointsPopup::openConfirmDialog(const ChannelPointRewardData &reward,
+                                          ChannelPointQueueMode action)
 {
     if (!this->confirmDialog_.isNull())
     {
         this->confirmDialog_->close();
     }
 
-    auto *dialog = new ChannelPointsConfirmDialog(this->channelLogin_, reward, this);
+    auto *dialog =
+        new ChannelPointsConfirmDialog(this->channelLogin_, reward, action, this);
     this->confirmDialog_ = dialog;
 
     QObject::connect(dialog, &ChannelPointsConfirmDialog::confirmed, this,
-                     [this, reward](bool /*keepDialogOpen*/) {
-                         getApp()->getChannelPoints()->redeemReward(
-                             this->channelLogin_, reward);
+                     [this, reward](ChannelPointQueueMode action,
+                                    bool /*keepDialogOpen*/,
+                                    const QString &inputText) {
+                         switch (action)
+                         {
+                             case ChannelPointQueueMode::Once:
+                                 getApp()->getChannelPoints()->armQueueOnce(
+                                     this->channelLogin_, reward.id, inputText);
+                                 break;
+                             case ChannelPointQueueMode::Repeat:
+                                 getApp()->getChannelPoints()->setRepeatMode(
+                                     this->channelLogin_, reward.id, true,
+                                     inputText);
+                                 break;
+                             case ChannelPointQueueMode::None:
+                             default:
+                                 getApp()->getChannelPoints()->redeemReward(
+                                     this->channelLogin_, reward, inputText);
+                                 break;
+                         }
                      });
 
     widgets::showAndMoveWindowTo(
