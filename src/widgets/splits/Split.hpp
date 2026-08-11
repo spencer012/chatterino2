@@ -68,6 +68,8 @@ public:
 
     void setModerationMode(bool value);
     bool getModerationMode() const;
+    void setCrowdCopyMode(bool value);
+    bool getCrowdCopyMode() const;
 
     std::optional<bool> checkSpellingOverride() const;
     void setCheckSpellingOverride(std::optional<bool> override);

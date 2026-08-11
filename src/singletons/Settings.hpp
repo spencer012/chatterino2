@@ -116,7 +116,6 @@ constexpr std::optional<std::string_view> qmagicenumDisplayName(
 
 struct SettingsArgs {
     bool isTest = false;
-    bool runMigrations = true;
 };
 
 /// Settings which are available for reading and writing on the gui thread.
@@ -808,6 +807,16 @@ public:
     IntSetting hideSimilarMaxMessagesToCheck = {
         "/similarity/hideSimilarMaxMessagesToCheck", 3};
 
+    // Crowd Copy
+    IntSetting crowdCopyTimeWindowSec = {"/crowdCopy/timeWindowSec", 30};
+    IntSetting crowdCopyMinUsers = {"/crowdCopy/minUsers", 3};
+    FloatSetting crowdCopyMinRatio = {"/crowdCopy/minRatio", 0.15f};
+    FloatSetting crowdCopyDecayHalfLifeSec = {"/crowdCopy/decayHalfLifeSec",
+                                              8.0f};
+    IntSetting crowdCopyUpdateIntervalMs = {"/crowdCopy/updateIntervalMs", 50};
+    IntSetting crowdCopySwitchBufferMs = {"/crowdCopy/switchBufferMs", 200};
+    IntSetting crowdCopyConfirmationMs = {"/crowdCopy/confirmationMs", 500};
+
     /// Timeout buttons
 
     ChatterinoSetting<std::vector<TimeoutButton>> timeoutButtons = {
@@ -874,13 +883,6 @@ private:
     ChatterinoSetting<std::vector<ChannelLog>> loggedChannelsSetting = {
         "/logging/channels"};
     SignalVector<QString> mutedChannels;
-
-    IntSetting settingsVersion = {
-        "/misc/settingsVersion",
-        0,
-    };
-
-    void migrate(bool isTest);
 
 public:
     SignalVector<HighlightPhrase> highlightedMessages;

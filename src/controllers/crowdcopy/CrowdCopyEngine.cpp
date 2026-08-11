@@ -1,0 +1,207 @@
+// SPDX-FileCopyrightText: 2026 Contributors to Chatterino <https://chatterino.com>
+//
+// SPDX-License-Identifier: MIT
+
+#include "controllers/crowdcopy/CrowdCopyEngine.hpp"
+
+#include "messages/MessageFlag.hpp"
+#include "singletons/Settings.hpp"
+
+#include <QTime>
+
+#include <cmath>
+#include <limits>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace {
+
+using namespace chatterino;
+
+bool shouldIgnoreMessage(const MessagePtr &message)
+{
+    if (message->flags.hasAny({MessageFlag::System, MessageFlag::Timeout,
+                               MessageFlag::Subscription,
+                               MessageFlag::ModerationAction, MessageFlag::Whisper,
+                               MessageFlag::AutoMod, MessageFlag::ClearChat}))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+double messageAgeSeconds(const MessagePtr &message, const QDateTime &now)
+{
+    if (message->serverReceivedTime.isValid())
+    {
+        return message->serverReceivedTime.msecsTo(now) / 1000.0;
+    }
+
+    if (message->parseTime.isValid())
+    {
+        int seconds = message->parseTime.secsTo(QTime::currentTime());
+        // Crossing midnight yields a negative delta, normalize to same-day age.
+        if (seconds < 0)
+        {
+            seconds += 24 * 60 * 60;
+        }
+        return static_cast<double>(seconds);
+    }
+
+    return std::numeric_limits<double>::infinity();
+}
+
+double decayWeight(double ageSeconds, double halfLifeSeconds)
+{
+    if (halfLifeSeconds <= 0.0)
+    {
+        return 1.0;
+    }
+
+    constexpr double ln2 = 0.6931471805599453;
+    return std::exp(-ln2 * ageSeconds / halfLifeSeconds);
+}
+
+}  // namespace
+
+namespace chatterino {
+
+QString CrowdCopyEngine::normalizeText(const QString &text)
+{
+    QString out;
+    out.reserve(text.size());
+
+    for (const auto ch : text)
+    {
+        // Drop format characters and selected invisible controls commonly seen in copied chat text.
+        if (ch.category() == QChar::Other_Format || ch == QChar(0x00AD) ||
+            ch == QChar(0x180E))
+        {
+            continue;
+        }
+        out.append(ch);
+    }
+
+    return out.trimmed();
+}
+
+CrowdCopyResult CrowdCopyEngine::evaluate(const std::vector<MessagePtr> &messages,
+                                          const QDateTime &now)
+{
+    const auto *settings = getSettings();
+    const auto maxAgeSeconds = settings->crowdCopyTimeWindowSec.getValue();
+    const auto halfLifeSeconds =
+        static_cast<double>(settings->crowdCopyDecayHalfLifeSec.getValue());
+    const auto minimumUsers = settings->crowdCopyMinUsers.getValue();
+    const auto minimumRatio =
+        static_cast<double>(settings->crowdCopyMinRatio.getValue());
+
+    struct WeightedMessage {
+        QString text;
+        double weight;
+    };
+
+    std::vector<WeightedMessage> weightedMessages;
+    weightedMessages.reserve(messages.size());
+
+    // Deduplicate by user by scanning from newest to oldest and only taking a user's latest message.
+    std::unordered_set<QString> seenUsers;
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it)
+    {
+        const auto &message = *it;
+        if (!message || shouldIgnoreMessage(message))
+        {
+            continue;
+        }
+
+        const auto ageSeconds = messageAgeSeconds(message, now);
+        if (ageSeconds < 0.0 || ageSeconds > static_cast<double>(maxAgeSeconds))
+        {
+            continue;
+        }
+
+        auto userKey = message->loginName.trimmed().toLower();
+        if (userKey.isEmpty())
+        {
+            userKey = message->displayName.trimmed().toLower();
+        }
+        if (userKey.isEmpty())
+        {
+            continue;
+        }
+
+        if (seenUsers.contains(userKey))
+        {
+            continue;
+        }
+        seenUsers.insert(userKey);
+
+        const auto normalizedText = normalizeText(message->messageText);
+        if (normalizedText.isEmpty())
+        {
+            continue;
+        }
+
+        weightedMessages.push_back(
+            {.text = normalizedText,
+             .weight = decayWeight(ageSeconds, halfLifeSeconds)});
+    }
+
+    if (weightedMessages.empty())
+    {
+        return {};
+    }
+
+    struct GroupStats {
+        double score{0.0};
+        int users{0};
+    };
+
+    std::unordered_map<QString, GroupStats> grouped;
+    grouped.reserve(weightedMessages.size());
+
+    double totalScore = 0.0;
+    for (const auto &msg : weightedMessages)
+    {
+        auto &group = grouped[msg.text];
+        group.score += msg.weight;
+        group.users += 1;
+        totalScore += msg.weight;
+    }
+
+    QString bestText;
+    GroupStats bestStats;
+    double bestScore = -std::numeric_limits<double>::infinity();
+    for (const auto &[text, stats] : grouped)
+    {
+        if (stats.score > bestScore)
+        {
+            bestScore = stats.score;
+            bestText = text;
+            bestStats = stats;
+        }
+    }
+
+    if (bestText.isEmpty())
+    {
+        return {};
+    }
+
+    if (bestStats.users < minimumUsers)
+    {
+        return {};
+    }
+
+    if (totalScore <= 0.0 || bestStats.score < totalScore * minimumRatio)
+    {
+        return {};
+    }
+
+    return {
+        .text = bestText,
+        .userCount = bestStats.users,
+    };
+}
+
+}  // namespace chatterino

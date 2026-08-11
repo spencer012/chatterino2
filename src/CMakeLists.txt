@@ -77,6 +77,8 @@ set(SOURCE_FILES
 
         controllers/chathistory/ChatHistoryManager.cpp
         controllers/chathistory/ChatHistoryManager.hpp
+        controllers/crowdcopy/CrowdCopyEngine.cpp
+        controllers/crowdcopy/CrowdCopyEngine.hpp
 
         controllers/commands/builtin/chatterino/Debugging.cpp
         controllers/commands/builtin/chatterino/Debugging.hpp

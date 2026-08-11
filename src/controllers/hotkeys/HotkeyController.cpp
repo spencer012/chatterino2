@@ -485,6 +485,9 @@ void HotkeyController::addDefaults(std::set<QString> &addedHotkeys)
         this->tryAddDefault(addedHotkeys, HotkeyCategory::SplitInput,
                             QKeySequence("Ctrl+R"), "openMessageHistory",
                             std::vector<QString>(), "search message history");
+        this->tryAddDefault(addedHotkeys, HotkeyCategory::SplitInput,
+                            QKeySequence("Ctrl+D"), "toggleCrowdCopy",
+                            std::vector<QString>(), "toggle crowd copy");
     }
 
     // window

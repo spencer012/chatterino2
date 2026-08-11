@@ -1144,6 +1144,81 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         "establish its similarity rating. Messages in the history will be "
         "compared to only if they are new enough.");
 
+    layout.addSubtitle("Crowd Copy");
+    layout.addDescription(
+        "Tune how Crowd Copy picks a likely message from recent chat.\n"
+        "Crowd Copy itself is toggled per split with a hotkey.");
+
+    SettingWidget::intInput("Crowd Copy time window (seconds)",
+                            s.crowdCopyTimeWindowSec,
+                            {
+                                .min = 1,
+                                .max = 120,
+                                .singleStep = 1,
+                            })
+        ->addTo(layout);
+
+    SettingWidget::intInput("Crowd Copy minimum unique users",
+                            s.crowdCopyMinUsers,
+                            {
+                                .min = 1,
+                                .max = 100,
+                                .singleStep = 1,
+                            })
+        ->addTo(layout);
+
+    layout.addDropdown<float>(
+        "Crowd Copy minimum winner ratio",
+        {"0.05", "0.10", "0.15", "0.20", "0.25", "0.33", "0.50"},
+        s.crowdCopyMinRatio,
+        [](auto val) {
+            return QString::number(val, 'f', 2);
+        },
+        [](auto args) {
+            return fuzzyToFloat(args.value, 0.15F);
+        },
+        true,
+        "Minimum share of weighted score needed for a candidate to be picked.");
+
+    layout.addDropdown<float>(
+        "Crowd Copy decay half-life (seconds)", {"2", "4", "6", "8", "12", "16"},
+        s.crowdCopyDecayHalfLifeSec,
+        [](auto val) {
+            return QString::number(val, 'f', 1);
+        },
+        [](auto args) {
+            return fuzzyToFloat(args.value, 8.0F);
+        },
+        true,
+        "How quickly old messages lose influence.");
+
+    SettingWidget::intInput("Crowd Copy update interval (ms)",
+                            s.crowdCopyUpdateIntervalMs,
+                            {
+                                .min = 10,
+                                .max = 1000,
+                                .singleStep = 10,
+                            })
+        ->addTo(layout);
+
+    SettingWidget::intInput("Crowd Copy confirmation time (ms)",
+                            s.crowdCopyConfirmationMs,
+                            {
+                                .min = 0,
+                                .max = 5000,
+                                .singleStep = 50,
+                            })
+        ->addTo(layout);
+
+    SettingWidget::intInput("Crowd Copy switch blank buffer (ms)",
+                            s.crowdCopySwitchBufferMs,
+                            {
+                                .min = 0,
+                                .max = 2000,
+                                .singleStep = 25,
+                            })
+        ->addTo(layout);
+
     layout.addSubtitle("Visible badges");
     SettingWidget::checkbox("Authority", s.showBadgesGlobalAuthority)
         ->setTooltip("e.g. staff, admin")

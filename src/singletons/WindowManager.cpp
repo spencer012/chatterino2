@@ -700,11 +700,107 @@ void WindowManager::encodeTab(SplitContainer *tab, bool isSelected,
     obj.insert("highlightsEnabled", tab->getTab()->hasHighlightsEnabled());
 
     // splits
+<<<<<<< HEAD
     obj.insert("splits2", std::visit(
                               [](auto &&it) {
                                   return it.toJson();
                               },
                               tab->buildDescriptor()));
+=======
+    QJsonObject splits;
+
+    WindowManager::encodeNodeRecursively(tab->getBaseNode(), splits);
+
+    obj.insert("splits2", splits);
+}
+
+void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
+{
+    switch (node->getType())
+    {
+        case SplitNode::Type::Split: {
+            obj.insert("type", "split");
+            obj.insert("moderationMode", node->getSplit()->getModerationMode());
+            obj.insert("crowdCopyMode", node->getSplit()->getCrowdCopyMode());
+
+            QJsonObject split;
+            WindowManager::encodeChannel(node->getSplit()->getIndirectChannel(),
+                                         split);
+            obj.insert("data", split);
+
+            QJsonArray filters;
+            WindowManager::encodeFilters(node->getSplit(), filters);
+            obj.insert("filters", filters);
+
+            auto spellOverride = node->getSplit()->checkSpellingOverride();
+            if (spellOverride)
+            {
+                obj["checkSpelling"] = *spellOverride;
+            }
+        }
+        break;
+        case SplitNode::Type::HorizontalContainer:
+        case SplitNode::Type::VerticalContainer: {
+            obj.insert("type",
+                       node->getType() == SplitNode::Type::HorizontalContainer
+                           ? "horizontal"
+                           : "vertical");
+
+            QJsonArray itemsArr;
+            for (const auto &n : node->getChildren())
+            {
+                QJsonObject subObj;
+                WindowManager::encodeNodeRecursively(n.get(), subObj);
+                itemsArr.append(subObj);
+            }
+            obj.insert("items", itemsArr);
+        }
+        break;
+
+        default:
+            break;
+    }
+
+    obj.insert("flexh", node->getHorizontalFlex());
+    obj.insert("flexv", node->getVerticalFlex());
+}
+
+void WindowManager::encodeChannel(IndirectChannel channel, QJsonObject &obj)
+{
+    assertInGuiThread();
+
+    obj.insert("type", qmagicenum::enumNameString(channel.getType()));
+    switch (channel.getType())
+    {
+        case Channel::Type::Twitch:
+        case Channel::Type::Misc:
+            obj.insert("name", channel.get()->getName());
+            break;
+
+        case Channel::Type::TwitchWhispers:
+        case Channel::Type::TwitchWatching:
+        case Channel::Type::TwitchMentions:
+        case Channel::Type::TwitchLive:
+        case Channel::Type::TwitchAutomod:
+
+        // FIXME: Remove these (#5703)
+        case Channel::Type::None:
+        case Channel::Type::Direct:
+        case Channel::Type::TwitchEnd:
+            break;
+    }
+}
+
+void WindowManager::encodeFilters(Split *split, QJsonArray &arr)
+{
+    assertInGuiThread();
+
+    auto filters = split->getFilters();
+    for (const auto &f : filters)
+    {
+        arr.append(f.toString(QUuid::WithoutBraces));
+    }
+>>>>>>> bb59cf30 (Add crowd copy)
 }
 
 void WindowManager::closeAll()

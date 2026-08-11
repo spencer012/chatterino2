@@ -73,6 +73,7 @@ SplitDescriptor SplitDescriptor::loadFromJSON(const QJsonObject &root)
     descriptor.type_ = data.value("type").toString();
     descriptor.server_ = data.value("server").toInt(-1);
     descriptor.moderationMode_ = root.value("moderationMode").toBool();
+    descriptor.crowdCopyMode_ = root.value("crowdCopyMode").toBool();
     if (data.contains("channel"))
     {
         descriptor.channelName_ = data.value("channel").toString();

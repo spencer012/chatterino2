@@ -7,12 +7,14 @@
 #include "messages/Message.hpp"
 #include "widgets/BaseWidget.hpp"
 
+#include <QDateTime>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPaintEvent>
 #include <QPointer>
 #include <QPropertyAnimation>
+#include <QTimer>
 #include <QTextEdit>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -52,6 +54,8 @@ public:
 
     void setReply(MessagePtr target);
     void setPlaceholderText(const QString &text);
+    void setCrowdCopyEnabled(bool enabled);
+    bool isCrowdCopyEnabled() const;
 
     /**
      * @brief Hide the widget
@@ -190,11 +194,27 @@ protected:
 
     /// History search mode (Ctrl+R)
     bool historySearchMode_{false};
+    bool crowdCopyEnabled_{false};
+    QTimer *crowdCopyTimer_{nullptr};
+    QTimer *crowdCopySwitchBufferTimer_{nullptr};
+    bool crowdCopyInBuffer_{false};
+    bool crowdCopyIsFirstWinner_{true};
+    QString crowdCopyCurrentText_;
+    QString crowdCopyPendingText_;
+    QString crowdCopyBufferTargetText_;
+    QDateTime crowdCopyPendingStart_;
+    QString defaultPlaceholderText_;
 
     void openMessageHistory();
     void exitHistorySearch(bool restoreText);
     void updateHistoryPopup();
     void hideHistoryPopup();
+    void crowdCopyTick();
+    void updateCrowdCopyIndicator();
+    bool isCrowdCopySupportedChannel() const;
+    void resetCrowdCopyState();
+    void applyCrowdCopyText(const QString &text);
+    void startCrowdCopySwitchBuffer(const QString &targetText);
 
     // Hidden denotes whether this split input should be hidden or not
     // This is used instead of the regular QWidget::hide/show because

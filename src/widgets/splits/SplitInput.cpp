@@ -9,6 +9,7 @@
 #include "common/QLogging.hpp"
 #include "controllers/chathistory/ChatHistoryManager.hpp"
 #include "controllers/commands/CommandController.hpp"
+#include "controllers/crowdcopy/CrowdCopyEngine.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "controllers/spellcheck/SpellChecker.hpp"
 #include "messages/Link.hpp"
@@ -129,6 +130,11 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
         auto *completer = new QCompleter(channel->completionModel);
         this->ui_.textEdit->setCompleter(completer);
         this->inputHighlighter->setChannel(this->split_->getChannel());
+
+        if (this->crowdCopyEnabled_ && !this->isCrowdCopySupportedChannel())
+        {
+            this->setCrowdCopyEnabled(false);
+        }
     });
 
     getSettings()->enableSpellChecking.connect(
@@ -156,6 +162,37 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
     curve.setCustomType(highlightEasingFunction);
     this->backgroundColorAnimation.setDuration(500);
     this->backgroundColorAnimation.setEasingCurve(curve);
+
+    this->crowdCopyTimer_ = new QTimer(this);
+    this->crowdCopyTimer_->setSingleShot(false);
+    QObject::connect(this->crowdCopyTimer_, &QTimer::timeout, this, [this] {
+        this->crowdCopyTick();
+    });
+
+    this->crowdCopySwitchBufferTimer_ = new QTimer(this);
+    this->crowdCopySwitchBufferTimer_->setSingleShot(true);
+    QObject::connect(this->crowdCopySwitchBufferTimer_, &QTimer::timeout, this,
+                     [this] {
+                         this->crowdCopyInBuffer_ = false;
+                         if (!this->crowdCopyEnabled_)
+                         {
+                             return;
+                         }
+                         this->applyCrowdCopyText(this->crowdCopyBufferTargetText_);
+                     });
+
+    getSettings()->crowdCopyUpdateIntervalMs.connect(
+        [this](const int &value, auto) {
+            if (this->crowdCopyTimer_ != nullptr)
+            {
+                this->crowdCopyTimer_->setInterval(std::max(value, 10));
+            }
+        },
+        this->managedConnections_);
+
+    this->crowdCopyTimer_->setInterval(
+        std::max(getSettings()->crowdCopyUpdateIntervalMs.getValue(), 10));
+    this->defaultPlaceholderText_ = this->ui_.textEdit->placeholderText();
 }
 
 void SplitInput::initLayout()
@@ -581,7 +618,13 @@ void SplitInput::postMessageSend(const QString &message,
 
     if (arguments.empty() || arguments.at(0) != "keepInput")
     {
+        const auto refillText =
+            this->crowdCopyEnabled_ ? this->crowdCopyCurrentText_ : QString{};
         this->clearInput();
+        if (this->crowdCopyEnabled_ && !refillText.isEmpty())
+        {
+            this->applyCrowdCopyText(refillText);
+        }
     }
     this->prevIndex_ = this->prevMsg_.size();
 }
@@ -884,6 +927,18 @@ void SplitInput::addShortcuts()
              {
                  this->openMessageHistory();
              }
+             return "";
+         }},
+        {"toggleCrowdCopy",
+         [this](const std::vector<QString> &arguments) -> QString {
+             (void)arguments;
+
+             if (!this->isCrowdCopySupportedChannel())
+             {
+                 return "Crowd Copy is only available in Twitch channel splits.";
+             }
+
+             this->setCrowdCopyEnabled(!this->isCrowdCopyEnabled());
              return "";
          }},
     };
@@ -1350,6 +1405,137 @@ void SplitInput::hideHistoryPopup()
     }
 }
 
+bool SplitInput::isCrowdCopySupportedChannel() const
+{
+    if (this->split_ == nullptr)
+    {
+        return false;
+    }
+
+    const auto channel = this->split_->getChannel();
+    if (!channel)
+    {
+        return false;
+    }
+
+    const auto type = channel->getType();
+    return type == Channel::Type::Twitch || type == Channel::Type::TwitchWatching;
+}
+
+void SplitInput::resetCrowdCopyState()
+{
+    this->crowdCopyInBuffer_ = false;
+    this->crowdCopyIsFirstWinner_ = true;
+    this->crowdCopyCurrentText_.clear();
+    this->crowdCopyPendingText_.clear();
+    this->crowdCopyBufferTargetText_.clear();
+    this->crowdCopyPendingStart_ = {};
+}
+
+void SplitInput::applyCrowdCopyText(const QString &text)
+{
+    const auto current = this->ui_.textEdit->toPlainText();
+    if (current != text)
+    {
+        this->ui_.textEdit->setPlainText(text);
+        this->ui_.textEdit->moveCursor(QTextCursor::End);
+    }
+
+    this->crowdCopyCurrentText_ = text;
+    this->crowdCopyPendingText_.clear();
+    this->crowdCopyPendingStart_ = {};
+    this->crowdCopyBufferTargetText_.clear();
+}
+
+void SplitInput::startCrowdCopySwitchBuffer(const QString &targetText)
+{
+    this->crowdCopyBufferTargetText_ = targetText;
+
+    const auto bufferMs = std::max(getSettings()->crowdCopySwitchBufferMs.getValue(),
+                                   0);
+    if (bufferMs <= 0)
+    {
+        this->applyCrowdCopyText(targetText);
+        return;
+    }
+
+    this->crowdCopyInBuffer_ = true;
+    if (this->ui_.textEdit->toPlainText() != "")
+    {
+        this->ui_.textEdit->setPlainText("");
+    }
+    this->ui_.textEdit->moveCursor(QTextCursor::End);
+
+    if (this->crowdCopySwitchBufferTimer_ != nullptr)
+    {
+        this->crowdCopySwitchBufferTimer_->start(bufferMs);
+    }
+}
+
+void SplitInput::crowdCopyTick()
+{
+    if (!this->crowdCopyEnabled_ || !this->isCrowdCopySupportedChannel() ||
+        this->crowdCopyInBuffer_)
+    {
+        return;
+    }
+
+    const auto channel = this->split_->getChannel();
+    if (!channel)
+    {
+        return;
+    }
+
+    const auto now = QDateTime::currentDateTimeUtc();
+    const auto result =
+        CrowdCopyEngine::evaluate(channel->getMessageSnapshot(), now);
+    const auto winner = result.text;
+
+    if (this->crowdCopyIsFirstWinner_ && this->crowdCopyCurrentText_.isEmpty() &&
+        !winner.isEmpty())
+    {
+        this->crowdCopyIsFirstWinner_ = false;
+        this->applyCrowdCopyText(winner);
+        return;
+    }
+
+    if (winner == this->crowdCopyCurrentText_)
+    {
+        this->crowdCopyPendingText_.clear();
+        this->crowdCopyPendingStart_ = {};
+        return;
+    }
+
+    if (winner != this->crowdCopyPendingText_)
+    {
+        this->crowdCopyPendingText_ = winner;
+        this->crowdCopyPendingStart_ = now;
+        return;
+    }
+
+    const auto confirmMs =
+        std::max(getSettings()->crowdCopyConfirmationMs.getValue(), 0);
+    if (this->crowdCopyPendingStart_.isValid() &&
+        this->crowdCopyPendingStart_.msecsTo(now) >= confirmMs)
+    {
+        this->crowdCopyIsFirstWinner_ = false;
+        this->startCrowdCopySwitchBuffer(winner);
+    }
+}
+
+void SplitInput::updateCrowdCopyIndicator()
+{
+    if (this->crowdCopyEnabled_)
+    {
+        this->ui_.textEdit->setPlaceholderText("Crowd Copy active");
+    }
+    else
+    {
+        this->ui_.textEdit->setPlaceholderText(this->defaultPlaceholderText_);
+    }
+    this->update();
+}
+
 void SplitInput::insertCompletionText(const QString &input_) const
 {
     auto &edit = *this->ui_.textEdit;
@@ -1590,6 +1776,11 @@ void SplitInput::paintEvent(QPaintEvent * /*event*/)
 
     QColor borderColor =
         this->theme->isLightTheme() ? QColor("#ccc") : QColor("#333");
+    if (this->crowdCopyEnabled_)
+    {
+        borderColor = this->theme->isLightTheme() ? QColor("#0B57D0")
+                                                  : QColor("#00D26A");
+    }
 
     QRect baseRect = this->rect();
     baseRect.setWidth(baseRect.width() - 1);
@@ -1721,7 +1912,55 @@ void SplitInput::setReply(MessagePtr target)
 
 void SplitInput::setPlaceholderText(const QString &text)
 {
-    this->ui_.textEdit->setPlaceholderText(text);
+    this->defaultPlaceholderText_ = text;
+    this->updateCrowdCopyIndicator();
+}
+
+void SplitInput::setCrowdCopyEnabled(bool enabled)
+{
+    if (enabled && !this->isCrowdCopySupportedChannel())
+    {
+        return;
+    }
+
+    if (this->crowdCopyEnabled_ == enabled)
+    {
+        return;
+    }
+
+    this->crowdCopyEnabled_ = enabled;
+    this->updateCrowdCopyIndicator();
+
+    if (!enabled)
+    {
+        if (this->crowdCopyTimer_ != nullptr)
+        {
+            this->crowdCopyTimer_->stop();
+        }
+        if (this->crowdCopySwitchBufferTimer_ != nullptr)
+        {
+            this->crowdCopySwitchBufferTimer_->stop();
+        }
+        this->resetCrowdCopyState();
+        return;
+    }
+
+    this->crowdCopyCurrentText_ = this->ui_.textEdit->toPlainText();
+    this->crowdCopyIsFirstWinner_ = this->crowdCopyCurrentText_.isEmpty();
+
+    if (this->crowdCopyTimer_ != nullptr)
+    {
+        this->crowdCopyTimer_->setInterval(
+            std::max(getSettings()->crowdCopyUpdateIntervalMs.getValue(), 10));
+        this->crowdCopyTimer_->start();
+    }
+
+    this->crowdCopyTick();
+}
+
+bool SplitInput::isCrowdCopyEnabled() const
+{
+    return this->crowdCopyEnabled_;
 }
 
 void SplitInput::clearInput()
