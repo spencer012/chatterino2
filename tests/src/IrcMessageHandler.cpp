@@ -702,3 +702,126 @@ TEST_P(TestIrcMessageHandlerP, CloneElements)
         }
     }
 }
+
+class TestIrcMessageHandlerFocused : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        this->mockApplication = std::make_unique<MockApplication>();
+        this->channel = std::make_shared<TwitchChannel>(u"pajlada"_s);
+        this->mockApplication->twitch.mockChannels.emplace("pajlada",
+                                                           this->channel);
+    }
+
+    void TearDown() override
+    {
+        this->channel.reset();
+        this->mockApplication.reset();
+    }
+
+    MessagePtr parsePrivmsg(const QString &body)
+    {
+        VectorMessageSink sink;
+        const auto payload =
+            QString("@badge-info=;badges=;color=#1E90FF;display-name=OtherUser;"
+                    "emotes=;id=1;mod=0;room-id=11148817;subscriber=0;"
+                    "tmi-sent-ts=1710000000000;user-id=123;user-type= "
+                    ":otheruser!otheruser@otheruser.tmi.twitch.tv PRIVMSG "
+                    "#pajlada :%1")
+                .arg(body);
+        auto *ircMessage =
+            Communi::IrcMessage::fromData(payload.toUtf8(), nullptr);
+        EXPECT_NE(ircMessage, nullptr);
+        if (ircMessage == nullptr)
+        {
+            return {};
+        }
+
+        IrcMessageHandler::parseMessageInto(ircMessage, sink, this->channel.get());
+        delete ircMessage;
+
+        EXPECT_EQ(sink.messages().size(), 1);
+        if (sink.messages().empty())
+        {
+            return {};
+        }
+        return sink.messages().back();
+    }
+
+    std::shared_ptr<TwitchChannel> channel;
+    std::unique_ptr<MockApplication> mockApplication;
+};
+
+TEST_F(TestIrcMessageHandlerFocused, HighlightedIgnoreSuppressesMentionsOnly)
+{
+    getSettings()->highlightedMessages.append(HighlightPhrase{
+        "hello",
+        true,
+        true,
+        false,
+        false,
+        false,
+        "",
+        HighlightPhrase::FALLBACK_HIGHLIGHT_COLOR,
+    });
+    getSettings()->ignoredMessages.append(IgnorePhrase{
+        "hello",
+        false,
+        true,
+        DEFAULT_IGNORE_PHRASE_REPLACE.toString(),
+        true,
+        true,
+        true,
+        false,
+    });
+
+    auto msg = this->parsePrivmsg("hello there");
+    ASSERT_TRUE(msg);
+
+    EXPECT_TRUE(msg->flags.has(MessageFlag::Highlighted));
+    EXPECT_TRUE(msg->flags.has(MessageFlag::ShowInMentions));
+    EXPECT_TRUE(msg->flags.has(MessageFlag::DoNotShowInMentions));
+    EXPECT_FALSE(msg->flags.has(MessageFlag::DisableHighlightColor));
+    EXPECT_FALSE(msg->getScrollBarHighlight().isNull());
+    EXPECT_TRUE(this->mockApplication->twitch.getMentionsChannel()
+                    ->getMessageSnapshot()
+                    .empty());
+}
+
+TEST_F(TestIrcMessageHandlerFocused, HighlightedIgnoreSuppressesColorOnly)
+{
+    getSettings()->highlightedMessages.append(HighlightPhrase{
+        "hello",
+        true,
+        true,
+        false,
+        false,
+        false,
+        "",
+        HighlightPhrase::FALLBACK_HIGHLIGHT_COLOR,
+    });
+    getSettings()->ignoredMessages.append(IgnorePhrase{
+        "hello",
+        false,
+        true,
+        DEFAULT_IGNORE_PHRASE_REPLACE.toString(),
+        true,
+        true,
+        false,
+        true,
+    });
+
+    auto msg = this->parsePrivmsg("hello there");
+    ASSERT_TRUE(msg);
+
+    EXPECT_TRUE(msg->flags.has(MessageFlag::Highlighted));
+    EXPECT_TRUE(msg->flags.has(MessageFlag::ShowInMentions));
+    EXPECT_FALSE(msg->flags.has(MessageFlag::DoNotShowInMentions));
+    EXPECT_TRUE(msg->flags.has(MessageFlag::DisableHighlightColor));
+    EXPECT_TRUE(msg->getScrollBarHighlight().isNull());
+    EXPECT_EQ(this->mockApplication->twitch.getMentionsChannel()
+                  ->getMessageSnapshot()
+                  .size(),
+              1);
+}

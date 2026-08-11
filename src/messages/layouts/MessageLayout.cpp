@@ -400,9 +400,9 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     }
     else if ((this->message_->flags.has(MessageFlag::Highlighted) ||
               this->message_->flags.has(MessageFlag::HighlightedWhisper)) &&
+             !this->message_->flags.has(MessageFlag::DisableHighlightColor) &&
              !this->flags.has(MessageLayoutFlag::IgnoreHighlights))
     {
-        assert(this->message_->highlightColor);
         if (this->message_->highlightColor)
         {
             // Blend highlight color with usual background color

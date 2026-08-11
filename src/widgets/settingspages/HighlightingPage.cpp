@@ -28,6 +28,8 @@
 #include <QTableView>
 #include <QTabWidget>
 
+#include <array>
+
 namespace chatterino {
 
 namespace {
@@ -123,6 +125,7 @@ HighlightingPage::HighlightingPage()
                             (new UserHighlightModel(nullptr))
                                 ->initialized(&getSettings()->highlightedUsers))
                         .getElement();
+                this->usersView_ = view;
 
                 view->addRegexHelpLink();
                 view->getTableView()->horizontalHeader()->hideSection(
@@ -324,6 +327,28 @@ HighlightingPage::HighlightingPage()
 
     // ---- misc
     this->disabledUsersChangedTimer_.setSingleShot(true);
+}
+
+bool HighlightingPage::filterElements(const QString &query)
+{
+    const auto baseMatch = SettingsPage::filterElements(query);
+
+    if (this->usersView_ == nullptr)
+    {
+        return baseMatch;
+    }
+
+    std::array userColumns{0};
+    const auto userMatch =
+        this->usersView_->filterSearchResults(query, userColumns);
+
+    // Keep the synthetic self-highlight row visible while searching.
+    if (!query.isEmpty() && this->usersView_->getModel()->rowCount() > 0)
+    {
+        this->usersView_->getTableView()->showRow(0);
+    }
+
+    return baseMatch || userMatch || query.isEmpty();
 }
 
 void HighlightingPage::openSoundDialog(const QModelIndex &clicked,

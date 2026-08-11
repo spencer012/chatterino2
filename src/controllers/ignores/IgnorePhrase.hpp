@@ -27,7 +27,10 @@ class IgnorePhrase
 {
 public:
     IgnorePhrase(const QString &pattern, bool isRegex, bool isBlock,
-                 const QString &replace, bool isCaseSensitive);
+                 const QString &replace, bool isCaseSensitive,
+                 bool highlightOnly = false,
+                 bool suppressMentions = false,
+                 bool suppressHighlight = false);
 
     bool operator==(const IgnorePhrase &other) const;
 
@@ -42,6 +45,12 @@ public:
     const QRegularExpression &getRegex() const;
 
     bool isBlock() const;
+
+    bool highlightOnly() const;
+
+    bool suppressMentions() const;
+
+    bool suppressHighlight() const;
 
     const QString &getReplace() const;
 
@@ -60,6 +69,9 @@ private:
     bool isRegex_;
     QRegularExpression regex_;
     bool isBlock_;
+    bool highlightOnly_;
+    bool suppressMentions_;
+    bool suppressHighlight_;
     QString replace_;
     bool isCaseSensitive_;
     mutable std::unordered_map<EmoteName, EmotePtr> emotes_;
@@ -79,6 +91,11 @@ struct Serialize<chatterino::IgnorePhrase> {
         chatterino::rj::set(ret, "pattern", value.getPattern(), a);
         chatterino::rj::set(ret, "regex", value.isRegex(), a);
         chatterino::rj::set(ret, "isBlock", value.isBlock(), a);
+        chatterino::rj::set(ret, "highlightOnly", value.highlightOnly(), a);
+        chatterino::rj::set(ret, "suppressMentions", value.suppressMentions(),
+                            a);
+        chatterino::rj::set(ret, "suppressHighlight",
+                            value.suppressHighlight(), a);
         chatterino::rj::set(ret, "replaceWith", value.getReplace(), a);
         chatterino::rj::set(ret, "caseSensitive", value.isCaseSensitive(), a);
 
@@ -100,17 +117,27 @@ struct Deserialize<chatterino::IgnorePhrase> {
         QString _pattern;
         bool _isRegex = false;
         bool _isBlock = false;
+        bool _highlightOnly = false;
+        bool _suppressMentions = false;
+        bool _suppressHighlight = false;
         QString _replace;
         bool _caseSens = true;
 
         chatterino::rj::getSafe(value, "pattern", _pattern);
         chatterino::rj::getSafe(value, "regex", _isRegex);
         chatterino::rj::getSafe(value, "isBlock", _isBlock);
+        chatterino::rj::getSafe(value, "highlightOnly", _highlightOnly);
+        chatterino::rj::getSafe(value, "suppressMentions",
+                                _suppressMentions);
+        chatterino::rj::getSafe(value, "suppressHighlight",
+                                _suppressHighlight);
         chatterino::rj::getSafe(value, "replaceWith", _replace);
         chatterino::rj::getSafe(value, "caseSensitive", _caseSens);
 
         return chatterino::IgnorePhrase(_pattern, _isRegex, _isBlock, _replace,
-                                        _caseSens);
+                                        _caseSens, _highlightOnly,
+                                        _suppressMentions,
+                                        _suppressHighlight);
     }
 };
 

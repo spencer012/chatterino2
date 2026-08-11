@@ -24,7 +24,18 @@ struct IgnoredMessageParameters {
     bool isBroadcaster;
 };
 
+struct IgnoredHighlightsResult {
+    bool suppressMentions = false;
+    bool suppressHighlight = false;
+
+    bool hasMatch() const
+    {
+        return this->suppressMentions || this->suppressHighlight;
+    }
+};
+
 bool isIgnoredMessage(IgnoredMessageParameters &&params);
+IgnoredHighlightsResult checkIgnoredHighlights(const QString &message);
 
 /// @brief Processes replacement ignore-phrases for a message
 ///

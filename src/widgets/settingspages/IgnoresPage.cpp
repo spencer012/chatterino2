@@ -46,7 +46,10 @@ IgnoresPage::IgnoresPage()
 
 void addPhrasesTab(LayoutCreator<QVBoxLayout> layout)
 {
-    layout.emplace<QLabel>("Ignore messages based certain patterns.");
+    layout.emplace<QLabel>(
+        "Ignore messages based on certain patterns. Highlight-only block rules "
+        "can independently suppress `/mentions` and highlight color without "
+        "hiding the message.");
     EditableModelView *view =
         layout
             .emplace<EditableModelView>(
@@ -54,7 +57,9 @@ void addPhrasesTab(LayoutCreator<QVBoxLayout> layout)
                     ->initialized(&getSettings()->ignoredMessages))
             .getElement();
     view->setTitles(
-        {"Pattern", "Regex", "Case-sensitive", "Block", "Replacement"});
+        {"Pattern", "Regex", "Case-sensitive", "Block",
+         "Highlight-\nonly", "Suppress\nMentions", "Suppress\nColor",
+         "Replacement"});
     view->getTableView()->horizontalHeader()->setSectionResizeMode(
         QHeaderView::Fixed);
     view->getTableView()->horizontalHeader()->setSectionResizeMode(
@@ -74,6 +79,9 @@ void addPhrasesTab(LayoutCreator<QVBoxLayout> layout)
             false,
             DEFAULT_IGNORE_PHRASE_REPLACE.toString(),
             true,
+            false,
+            false,
+            false,
         });
     });
 }

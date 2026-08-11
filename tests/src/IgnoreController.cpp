@@ -196,3 +196,57 @@ TEST_F(TestIgnoreController, processIgnorePhrases)
             << "' and output '" << message << "'";
     }
 }
+
+TEST_F(TestIgnoreController, highlightedIgnoresDoNotBlockMessages)
+{
+    getSettings()->ignoredMessages.append(IgnorePhrase{
+        "hello",
+        false,
+        true,
+        DEFAULT_IGNORE_PHRASE_REPLACE.toString(),
+        true,
+        true,
+        true,
+        false,
+    });
+
+    const auto ignored = isIgnoredMessage({
+        .message = "hello there",
+        .twitchUserID = {},
+        .twitchUserLogin = {},
+        .isMod = false,
+        .isBroadcaster = false,
+    });
+
+    EXPECT_FALSE(ignored);
+}
+
+TEST_F(TestIgnoreController, checkIgnoredHighlightsAggregatesMatchingRules)
+{
+    getSettings()->ignoredMessages.append(IgnorePhrase{
+        "hello",
+        false,
+        true,
+        DEFAULT_IGNORE_PHRASE_REPLACE.toString(),
+        true,
+        true,
+        true,
+        false,
+    });
+    getSettings()->ignoredMessages.append(IgnorePhrase{
+        "hello",
+        false,
+        true,
+        DEFAULT_IGNORE_PHRASE_REPLACE.toString(),
+        true,
+        true,
+        false,
+        true,
+    });
+
+    const auto result = checkIgnoredHighlights("hello there");
+
+    EXPECT_TRUE(result.suppressMentions);
+    EXPECT_TRUE(result.suppressHighlight);
+    EXPECT_TRUE(result.hasMatch());
+}

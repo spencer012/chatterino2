@@ -143,7 +143,8 @@ bool isIgnoredMessage(IgnoredMessageParameters &&params)
         auto phrases = getSettings()->ignoredMessages.readOnly();
         for (const auto &phrase : *phrases)
         {
-            if (phrase.isBlock() && phrase.isMatch(params.message))
+            if (phrase.isBlock() && !phrase.highlightOnly() &&
+                phrase.isMatch(params.message))
             {
                 qCDebug(chatterinoMessage)
                     << "Blocking message because it contains ignored phrase"
@@ -200,6 +201,31 @@ bool isIgnoredMessage(IgnoredMessageParameters &&params)
     }
 
     return false;
+}
+
+IgnoredHighlightsResult checkIgnoredHighlights(const QString &message)
+{
+    IgnoredHighlightsResult result;
+
+    if (message.isEmpty())
+    {
+        return result;
+    }
+
+    auto phrases = getSettings()->ignoredMessages.readOnly();
+    for (const auto &phrase : *phrases)
+    {
+        if (!phrase.isBlock() || !phrase.highlightOnly() ||
+            !phrase.isMatch(message))
+        {
+            continue;
+        }
+
+        result.suppressMentions |= phrase.suppressMentions();
+        result.suppressHighlight |= phrase.suppressHighlight();
+    }
+
+    return result;
 }
 
 void processIgnorePhrases(const std::vector<IgnorePhrase> &phrases,

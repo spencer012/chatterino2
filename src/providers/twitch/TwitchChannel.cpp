@@ -1486,7 +1486,9 @@ void TwitchChannel::loadRecentMessages()
                     msg->flags.has(MessageFlag::Highlighted);
                 const auto showInMentions =
                     msg->flags.has(MessageFlag::ShowInMentions);
-                if (highlighted && showInMentions)
+                const auto suppressMentions =
+                    msg->flags.has(MessageFlag::DoNotShowInMentions);
+                if (highlighted && showInMentions && !suppressMentions)
                 {
                     msgs.push_back(msg);
                 }

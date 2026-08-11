@@ -682,7 +682,8 @@ void IrcMessageHandler::handleWhisperMessage(Communi::IrcMessage *ircMessage)
 
     getApp()->getTwitch()->setLastUserThatWhisperedMe(message->loginName);
 
-    if (message->flags.has(MessageFlag::ShowInMentions))
+    if (message->flags.has(MessageFlag::ShowInMentions) &&
+        !message->flags.has(MessageFlag::DoNotShowInMentions))
     {
         getApp()->getTwitch()->getMentionsChannel()->addMessage(
             message, MessageContext::Original);
@@ -1208,8 +1209,10 @@ void IrcMessageHandler::addMessage(Communi::IrcMessage *message,
 
         const auto highlighted = msg->flags.has(MessageFlag::Highlighted);
         const auto showInMentions = msg->flags.has(MessageFlag::ShowInMentions);
+        const auto suppressMentions =
+            msg->flags.has(MessageFlag::DoNotShowInMentions);
 
-        if (highlighted && showInMentions &&
+        if (highlighted && showInMentions && !suppressMentions &&
             sink.sinkTraits().has(MessageSinkTrait::AddMentionsToGlobalChannel))
         {
             twitch.getMentionsChannel()->addMessage(msg,

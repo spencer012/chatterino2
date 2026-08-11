@@ -35,8 +35,9 @@ Message::~Message()
 
 ScrollbarHighlight Message::getScrollBarHighlight() const
 {
-    if (this->flags.has(MessageFlag::Highlighted) ||
-        this->flags.has(MessageFlag::HighlightedWhisper))
+    if ((this->flags.has(MessageFlag::Highlighted) ||
+         this->flags.has(MessageFlag::HighlightedWhisper)) &&
+        !this->flags.has(MessageFlag::DisableHighlightColor))
     {
         return {
             this->highlightColor,

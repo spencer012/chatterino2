@@ -80,6 +80,10 @@ enum class MessageFlag : std::int64_t {
     Announcement = (1LL << 44),
     /// Notifications that do not yet have special handling/categorization
     UncategorizedNotification = (1LL << 45),
+    /// The message should not be mirrored into the global mentions channel
+    DoNotShowInMentions = (1LL << 46),
+    /// The message should keep highlight side effects but not draw highlight color
+    DisableHighlightColor = (1LL << 47),
 };
 using MessageFlags = FlagsEnum<MessageFlag>;
 
