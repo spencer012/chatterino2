@@ -100,3 +100,17 @@ This is a fork of an existing open source project with some custom functionality
      - `FreeSerif` remains included for other special characters.
      - If Qt does not already see a fallback family, the Windows font registry is used to load the installed font file with `QFontDatabase::addApplicationFont()`.
 
+6. **Per-Split Input Box Toggle**
+   - **Feature**: Individual splits can automatically hide their empty input box to reclaim vertical chat space.
+   - **Files Modified**:
+     - `src/widgets/splits/Split.hpp/.cpp` - Added per-split hidden-input state, automatic visibility updates, focus/reply handling, hotkey wiring, and popup/descriptor plumbing.
+     - `src/widgets/splits/SplitHeader.cpp` - Added a checkable `Hide input box` action to the split's `More` menu.
+     - `src/controllers/hotkeys/ActionNames.hpp` - Added the configurable `toggleInputVisibility` split action without a default binding.
+     - `src/common/WindowDescriptors.hpp/.cpp` - Added the persisted `inputHidden` split descriptor field.
+     - `src/singletons/WindowManager.cpp` - Retains upstream descriptor-based split serialization after resolving the feature rebase.
+     - `src/widgets/splits/SplitContainer.cpp` - Restores hidden-input mode for persisted splits.
+   - **Behavior Notes**:
+     - Hidden inputs remain constructed but use the existing zero-height `SplitInput::hide()` path, avoiding layout and paint cost while retaining keyboard event routing.
+     - The input automatically appears when it has text, enters reverse search, receives focus, or starts a reply; it hides again when empty and unfocused.
+     - The toggle is stored per split and copied when a split is opened in a popup window.
+

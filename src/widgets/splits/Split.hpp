@@ -71,6 +71,8 @@ public:
     bool getModerationMode() const;
     void setCrowdCopyMode(bool value);
     bool getCrowdCopyMode() const;
+    void setInputHidden(bool value);
+    bool getInputHidden() const;
 
     std::optional<bool> checkSpellingOverride() const;
     void setCheckSpellingOverride(std::optional<bool> override);
@@ -167,6 +169,7 @@ private:
     IndirectChannel channel_;
 
     bool moderationMode_{};
+    bool inputHidden_{};
     bool isTopRightSplit_{};
 
     bool isMouseOver_{};

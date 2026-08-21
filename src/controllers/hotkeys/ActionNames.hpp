@@ -188,6 +188,8 @@ inline const std::map<HotkeyCategory, ActionDefinitionMap> actionNames{
          {"showGlobalSearch", ActionDefinition{"Search all channels"}},
          {"debug", ActionDefinition{"Show debug popup"}},
          {"popupOverlay", ActionDefinition{"New overlay popup"}},
+         {"toggleInputVisibility",
+          ActionDefinition{"Toggle automatic input box hiding"}},
          {"toggleOverlayInertia",
           ActionDefinition{
               .displayName = "Toggle overlay click-through",
