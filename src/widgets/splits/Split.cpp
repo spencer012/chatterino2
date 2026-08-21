@@ -226,11 +226,15 @@ Split::Split(QWidget *parent)
 
     this->signalHolder_.managedConnect(this->input_->ui_.textEdit->focused,
                                        [this] {
+                                           this->refreshInputState(
+                                               this->input_->getInputText());
                                            // Forward textEdit's focused event
                                            this->focused.invoke();
                                        });
     this->signalHolder_.managedConnect(this->input_->ui_.textEdit->focusLost,
                                        [this] {
+                                           this->refreshInputState(
+                                               this->input_->getInputText());
                                            // Forward textEdit's focusLost event
                                            this->focusLost.invoke();
                                        });
@@ -269,6 +273,11 @@ void Split::addShortcuts()
         {"showChannelPoints",
          [this](const std::vector<QString> &) -> QString {
              this->openChannelPointsPopup();
+             return "";
+         }},
+        {"toggleInputVisibility",
+         [this](const std::vector<QString> &) -> QString {
+             this->setInputHidden(!this->getInputHidden());
              return "";
          }},
         {"showGlobalSearch",
@@ -723,7 +732,7 @@ void Split::refreshModerationMode()
 
 void Split::refreshInputState(const QString &inputText)
 {
-    if (getSettings()->showEmptyInput)
+    if (getSettings()->showEmptyInput && !this->inputHidden_)
     {
         // We always show the input regardless of the text, so we can early out here
         if (this->input_->isHidden())
@@ -733,7 +742,12 @@ void Split::refreshInputState(const QString &inputText)
         return;
     }
 
-    if (inputText.isEmpty() && !this->input_->isInHistorySearch())
+    const bool keepVisibleForPerSplitMode =
+        this->inputHidden_ &&
+        (this->input_->ui_.textEdit->hasFocus() ||
+         this->input_->replyTarget_ != nullptr);
+    if (inputText.isEmpty() && !this->input_->isInHistorySearch() &&
+        !keepVisibleForPerSplitMode)
     {
         this->input_->hide();
     }
@@ -886,6 +900,18 @@ void Split::setCrowdCopyMode(bool value)
 bool Split::getCrowdCopyMode() const
 {
     return this->input_->isCrowdCopyEnabled();
+}
+
+void Split::setInputHidden(bool value)
+{
+    this->inputHidden_ = value;
+    this->refreshInputState(this->input_->getInputText());
+    getApp()->getWindows()->queueSave();
+}
+
+bool Split::getInputHidden() const
+{
+    return this->inputHidden_;
 }
 
 std::optional<bool> Split::checkSpellingOverride() const
@@ -1081,6 +1107,7 @@ void Split::popup()
     split->setChannel(this->getIndirectChannel());
     split->setModerationMode(this->getModerationMode());
     split->setCrowdCopyMode(this->getCrowdCopyMode());
+    split->setInputHidden(this->getInputHidden());
     split->setFilters(this->getFilters());
 
     window.getNotebook().getOrAddSelectedPage()->insertSplit(split);
@@ -1354,12 +1381,15 @@ void Split::drag()
 void Split::setInputReply(const MessagePtr &reply)
 {
     this->input_->setReply(reply);
+    this->refreshInputState(this->input_->getInputText());
 }
 
 SplitDescriptor Split::buildDescriptor() const
 {
     SplitDescriptor descriptor;
     descriptor.moderationMode_ = this->getModerationMode();
+    descriptor.crowdCopyMode_ = this->getCrowdCopyMode();
+    descriptor.inputHidden_ = this->getInputHidden();
     descriptor.filters_ = this->getFilters();
     descriptor.spellCheckOverride = this->checkSpellingOverride();
 

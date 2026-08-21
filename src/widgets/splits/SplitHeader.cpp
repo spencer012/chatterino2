@@ -630,6 +630,16 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
             this->split_->setModerationMode(!this->split_->getModerationMode());
         });
 
+    auto *hideInputAction = moreMenu->addAction(
+        "Hide input box",
+        h->getDisplaySequence(HotkeyCategory::Split,
+                              "toggleInputVisibility"),
+        this->split_, [this]() {
+            this->split_->setInputHidden(!this->split_->getInputHidden());
+        });
+    hideInputAction->setCheckable(true);
+    hideInputAction->setChecked(this->split_->getInputHidden());
+
     if (this->split_->getChannel()->getType() == Channel::Type::TwitchMentions)
     {
         auto *action = new QAction(this);
