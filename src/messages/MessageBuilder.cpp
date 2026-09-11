@@ -1778,6 +1778,7 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     assert(channel != nullptr);
 
     auto tags = ircMessage->tags();
+    const auto ignoredHighlights = checkIgnoredHighlights(content);
     if (args.allowIgnore)
     {
         bool ignored = MessageBuilder::isIgnored(
@@ -1972,6 +1973,18 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
 
     // highlights
     HighlightAlert highlight = builder.parseHighlights(tags, content, args);
+    if (builder->flags.has(MessageFlag::Highlighted) &&
+        ignoredHighlights.hasMatch())
+    {
+        if (ignoredHighlights.suppressMentions)
+        {
+            builder->flags.set(MessageFlag::DoNotShowInMentions);
+        }
+        if (ignoredHighlights.suppressHighlight)
+        {
+            builder->flags.set(MessageFlag::DisableHighlightColor);
+        }
+    }
     if (tags.has("historical"))
     {
         highlight.playSound = false;

@@ -54,7 +54,7 @@ ChannelPointsConfirmDialog::ChannelPointsConfirmDialog(
 
     auto *hintLabel = layout
                           .emplace<QLabel>(
-                              "Hold Shift while confirming to keep the rewards popup open.")
+                              "Hold Shift while confirming to keep this confirm dialog open.")
                           .getElement();
     hintLabel->setWordWrap(true);
 
@@ -85,10 +85,13 @@ void ChannelPointsConfirmDialog::keyPressEvent(QKeyEvent *event)
 
 void ChannelPointsConfirmDialog::confirm()
 {
-    const bool keepPopupOpen =
+    const bool keepDialogOpen =
         QApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
-    Q_EMIT this->confirmed(keepPopupOpen);
-    this->close();
+    Q_EMIT this->confirmed(keepDialogOpen);
+    if (!keepDialogOpen)
+    {
+        this->close();
+    }
 }
 
 }  // namespace chatterino

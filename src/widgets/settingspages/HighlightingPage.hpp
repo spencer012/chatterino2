@@ -20,11 +20,13 @@ class HighlightingPage : public SettingsPage
 {
 public:
     HighlightingPage();
+    bool filterElements(const QString &query) override;
 
 private:
     enum HighlightTab { Messages = 0, Users = 1, Badges = 2, Blacklist = 3 };
 
     QTimer disabledUsersChangedTimer_;
+    EditableModelView *usersView_{};
 
     void tableCellClicked(const QModelIndex &clicked, EditableModelView *view,
                           HighlightTab tab);

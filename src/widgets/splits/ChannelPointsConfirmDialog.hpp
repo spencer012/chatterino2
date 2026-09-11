@@ -22,7 +22,7 @@ public:
                                QWidget *parent = nullptr);
 
 Q_SIGNALS:
-    void confirmed(bool keepPopupOpen);
+    void confirmed(bool keepDialogOpen);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
