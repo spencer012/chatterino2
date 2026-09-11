@@ -24,6 +24,7 @@ class SplitInput;
 class SplitContainer;
 class SplitOverlay;
 class PinnedMessageWidget;
+class RaidBannerWidget;
 class SelectChannelDialog;
 class OverlayWindow;
 class ChannelPointsPopup;
@@ -178,6 +179,7 @@ private:
     QVBoxLayout *const vbox_;
     SplitHeader *const header_;
     PinnedMessageWidget *const pinnedBanner_;
+    RaidBannerWidget *const raidBanner_;
     ChannelView *const view_;
     SplitInput *const input_;
     SplitOverlay *const overlay_;
