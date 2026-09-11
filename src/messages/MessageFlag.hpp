@@ -82,6 +82,10 @@ enum class MessageFlag : std::int64_t {
     UncategorizedNotification = (1LL << 45),
     /// The message was detected as ASCII art and has its layout width limited to the default web chat width.
     AsciiArt = (1LL << 46),
+    /// The message should not be mirrored into the global mentions channel
+    DoNotShowInMentions = (1LL << 47),
+    /// The message should keep highlight side effects but not draw highlight color
+    DisableHighlightColor = (1LL << 48),
 };
 using MessageFlags = FlagsEnum<MessageFlag>;
 

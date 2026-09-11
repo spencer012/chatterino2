@@ -372,6 +372,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     }();
 
     if (this->message_->flags.has(MessageFlag::Highlighted) &&
+        !this->message_->flags.has(MessageFlag::DisableHighlightColor) &&
         !this->flags.has(MessageLayoutFlag::IgnoreHighlights))
     {
         // NOTE: As we move more things into Highlighted, and less things to use custom flags for their color,

@@ -368,13 +368,9 @@ void ChannelPointsPopup::openConfirmDialog(const ChannelPointRewardData &reward)
     this->confirmDialog_ = dialog;
 
     QObject::connect(dialog, &ChannelPointsConfirmDialog::confirmed, this,
-                     [this, reward](bool keepPopupOpen) {
-                         if (getApp()->getChannelPoints()->redeemReward(
-                                 this->channelLogin_, reward) &&
-                             !keepPopupOpen)
-                         {
-                             this->close();
-                         }
+                     [this, reward](bool /*keepDialogOpen*/) {
+                         getApp()->getChannelPoints()->redeemReward(
+                             this->channelLogin_, reward);
                      });
 
     widgets::showAndMoveWindowTo(
