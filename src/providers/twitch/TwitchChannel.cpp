@@ -1591,6 +1591,7 @@ void TwitchChannel::refreshPubSub()
 
     getApp()->getTwitchPubSub()->listenToChannelPointRewards(roomId);
     getApp()->getTwitchPubSub()->listenToPinnedChatUpdates(roomId);
+    getApp()->getTwitchPubSub()->listenToRaid(roomId);
 
     if (currentAccount->isAnon())
     {
@@ -2789,6 +2790,171 @@ void TwitchChannel::unpinCurrentMessage()
         [](HelixUnpinMessageError /*error*/, const QString &message) {
             qCWarning(chatterinoTwitch)
                 << "Failed to unpin message:" << message;
+        });
+}
+
+void TwitchChannel::handleRaidUpdate(const RaidInfo &info)
+{
+    const bool isNewRaid =
+        !this->raidState_ || this->raidState_->info.id != info.id;
+
+    if (isNewRaid)
+    {
+        // Twitch can keep sending updates after go/cancel for the same raid.
+        if (!info.id.isEmpty() && info.id == this->lastTerminalRaidId_)
+        {
+            return;
+        }
+
+        this->raidState_ = std::make_unique<RaidState>();
+        this->announcedRaidGo_ = false;
+        this->announcedRaidCancel_ = false;
+    }
+
+    this->raidState_->info = info;
+    this->raidState_->phase = RaidPhase::Active;
+    this->raidState_->lastUpdateAt = QDateTime::currentDateTimeUtc();
+
+    if (isNewRaid && !this->raidState_->announcedStart)
+    {
+        this->raidState_->announcedStart = true;
+        this->addMessage(MessageBuilder::makeRaidStartedMessage(
+                             this->getDisplayName(), this->getName(),
+                             info.targetName(), info.targetLogin),
+                         MessageContext::Original);
+        this->refreshRaidTargetStream();
+    }
+
+    this->raidChanged.invoke();
+}
+
+void TwitchChannel::handleRaidGo(const RaidInfo &info)
+{
+    if (this->announcedRaidGo_ || this->announcedRaidCancel_)
+    {
+        return;
+    }
+
+    this->announcedRaidGo_ = true;
+
+    if (!this->raidState_)
+    {
+        this->raidState_ = std::make_unique<RaidState>();
+    }
+    if (!info.id.isEmpty())
+    {
+        this->raidState_->info = info;
+    }
+    this->raidState_->phase = RaidPhase::GoneThrough;
+    if (!this->raidState_->info.id.isEmpty())
+    {
+        this->lastTerminalRaidId_ = this->raidState_->info.id;
+    }
+
+    this->addMessage(MessageBuilder::makeRaidGoneThroughMessage(
+                         this->raidState_->info.targetName(),
+                         this->raidState_->info.targetLogin),
+                     MessageContext::Original);
+    this->raidChanged.invoke();
+    this->raidState_.reset();
+}
+
+void TwitchChannel::handleRaidCancel(const RaidInfo &info)
+{
+    if (this->announcedRaidGo_ || this->announcedRaidCancel_)
+    {
+        return;
+    }
+
+    this->announcedRaidCancel_ = true;
+
+    if (!this->raidState_)
+    {
+        this->raidState_ = std::make_unique<RaidState>();
+    }
+    if (!info.id.isEmpty())
+    {
+        this->raidState_->info = info;
+    }
+    this->raidState_->phase = RaidPhase::Cancelled;
+    if (!this->raidState_->info.id.isEmpty())
+    {
+        this->lastTerminalRaidId_ = this->raidState_->info.id;
+    }
+
+    this->addMessage(MessageBuilder::makeRaidCancelledMessage(
+                         this->raidState_->info.targetName(),
+                         this->raidState_->info.targetLogin),
+                     MessageContext::Original);
+    this->raidChanged.invoke();
+    this->raidState_.reset();
+}
+
+const RaidState *TwitchChannel::getRaidState() const
+{
+    return this->raidState_.get();
+}
+
+bool TwitchChannel::tryConsumeRaidAutoFollow()
+{
+    if (!this->raidState_ || this->raidState_->autoFollowConsumed)
+    {
+        return false;
+    }
+
+    this->raidState_->autoFollowConsumed = true;
+    return true;
+}
+
+void TwitchChannel::refreshRaidTargetStream()
+{
+    if (!this->raidState_ || this->raidState_->info.targetLogin.isEmpty())
+    {
+        return;
+    }
+
+    const auto raidId = this->raidState_->info.id;
+    const auto login = this->raidState_->info.targetLogin;
+
+    getHelix()->getStreamByName(
+        login,
+        [weak = this->weakFromThis(), raidId](bool live,
+                                              const HelixStream &stream) {
+            auto self = std::dynamic_pointer_cast<TwitchChannel>(weak.lock());
+            if (!self || !self->raidState_ ||
+                self->raidState_->info.id != raidId)
+            {
+                return;
+            }
+
+            self->raidState_->streamInfoFetched = true;
+            self->raidState_->live = live;
+            if (live)
+            {
+                self->raidState_->streamTitle = stream.title;
+                self->raidState_->gameName = stream.gameName;
+                self->raidState_->streamViewerCount = stream.viewerCount;
+            }
+            else
+            {
+                self->raidState_->streamTitle.clear();
+                self->raidState_->gameName.clear();
+                self->raidState_->streamViewerCount = 0;
+            }
+            self->raidChanged.invoke();
+        },
+        [weak = this->weakFromThis(), raidId] {
+            auto self = std::dynamic_pointer_cast<TwitchChannel>(weak.lock());
+            if (!self || !self->raidState_ ||
+                self->raidState_->info.id != raidId)
+            {
+                return;
+            }
+
+            self->raidState_->streamInfoFetched = true;
+            self->raidChanged.invoke();
+        },
+        [] {
         });
 }
 

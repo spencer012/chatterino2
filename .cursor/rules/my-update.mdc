@@ -114,3 +114,24 @@ This is a fork of an existing open source project with some custom functionality
      - The input automatically appears when it has text, enters reverse search, receives focus, or starts a reply; it hides again when empty and unfocused.
      - The toggle is stored per split and copied when a split is opened in a popup window.
 
+7. **Raid Follow Banner**
+   - **Feature**: When a watched channel starts an outgoing raid, visible splits show a banner with target info, Streamlink / go-to-tab actions, and an auto-follow checkbox. Chat also gets started / gone-through / cancelled system messages.
+   - **Files Added**:
+     - `src/providers/twitch/RaidInfo.hpp` - Shared raid payload / UI state structs.
+     - `src/providers/twitch/pubsubmessages/Raid.hpp/.cpp` - Parser for PubSub `raid_update_v2` / `raid_go_v2` / `raid_cancel_v2`.
+     - `src/widgets/splits/RaidBannerWidget.hpp/.cpp` - Banner UI stacked under the pinned-message banner.
+   - **Files Modified**:
+     - `src/providers/twitch/PubSubManager.hpp/.cpp` - `listenToRaid()` and raid signals.
+     - `src/providers/twitch/PubSubClient.cpp` - Dispatch `raid.{channelID}` messages.
+     - `src/providers/twitch/PubSubMessages.hpp` - Export raid message parser.
+     - `src/providers/twitch/TwitchChannel.hpp/.cpp` - Raid listen, state, Helix target-stream fetch, system messages.
+     - `src/providers/twitch/TwitchIrcServer.cpp` - Route PubSub raid signals onto the channel.
+     - `src/widgets/splits/Split.hpp/.cpp` - Insert `raidBanner_` between pinned banner and chat view.
+     - `src/CMakeLists.txt` - Added new sources.
+   - **Behavior Notes**:
+     - Banner is shown only when the split is on-screen (`QWidget::isVisible()`), including unfocused windows; background tabs are ignored.
+     - First `raid_update_v2` per raid id posts "X started a raid to Y." Countdown ticks do not repeat that message.
+     - `raid_go_v2` / `raid_cancel_v2` post "gone through" / "cancelled" messages in the source channel, once per raid (Twitch can emit go multiple times).
+     - Raid system-message names are clickable UserInfo links, matching live/offline/hosting notices.
+     - Auto checkbox starts unchecked for each raid and only stays checked if the user clicks it. When checked, the banner jumps to an existing target split or opens a new main-window tab when the raid executes, once per raid from a visible split.
+

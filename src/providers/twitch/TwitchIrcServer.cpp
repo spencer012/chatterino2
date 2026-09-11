@@ -290,6 +290,54 @@ void TwitchIrcServer::initialize()
             this->reloadAllSevenTVChannelEmotes();
         },
         this->signalHolder, false);
+
+    this->signalHolder.managedConnect(
+        getApp()->getTwitchPubSub()->raid.updated,
+        [this](const QString &channelId, const RaidInfo &info) {
+            auto chan = this->getChannelOrEmptyByID(channelId);
+            postToThread([chan, info] {
+                if (isAppAboutToQuit())
+                {
+                    return;
+                }
+                if (auto *channel = dynamic_cast<TwitchChannel *>(chan.get()))
+                {
+                    channel->handleRaidUpdate(info);
+                }
+            });
+        });
+
+    this->signalHolder.managedConnect(
+        getApp()->getTwitchPubSub()->raid.gone,
+        [this](const QString &channelId, const RaidInfo &info) {
+            auto chan = this->getChannelOrEmptyByID(channelId);
+            postToThread([chan, info] {
+                if (isAppAboutToQuit())
+                {
+                    return;
+                }
+                if (auto *channel = dynamic_cast<TwitchChannel *>(chan.get()))
+                {
+                    channel->handleRaidGo(info);
+                }
+            });
+        });
+
+    this->signalHolder.managedConnect(
+        getApp()->getTwitchPubSub()->raid.cancelled,
+        [this](const QString &channelId, const RaidInfo &info) {
+            auto chan = this->getChannelOrEmptyByID(channelId);
+            postToThread([chan, info] {
+                if (isAppAboutToQuit())
+                {
+                    return;
+                }
+                if (auto *channel = dynamic_cast<TwitchChannel *>(chan.get()))
+                {
+                    channel->handleRaidCancel(info);
+                }
+            });
+        });
 }
 
 void TwitchIrcServer::aboutToQuit()

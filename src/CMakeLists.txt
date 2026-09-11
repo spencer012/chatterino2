@@ -486,6 +486,7 @@ set(SOURCE_FILES
         providers/twitch/TwitchBadges.hpp
         providers/twitch/TwitchChannel.cpp
         providers/twitch/TwitchChannel.hpp
+        providers/twitch/RaidInfo.hpp
         providers/twitch/TwitchCommon.cpp
         providers/twitch/TwitchCommon.hpp
         providers/twitch/TwitchEmotes.cpp
@@ -525,6 +526,8 @@ set(SOURCE_FILES
         providers/twitch/pubsubmessages/Message.hpp
         providers/twitch/pubsubmessages/PinnedChatUpdates.cpp
         providers/twitch/pubsubmessages/PinnedChatUpdates.hpp
+        providers/twitch/pubsubmessages/Raid.cpp
+        providers/twitch/pubsubmessages/Raid.hpp
         providers/twitch/pubsubmessages/Unlisten.cpp
         providers/twitch/pubsubmessages/Unlisten.hpp
 
@@ -901,6 +904,8 @@ set(SOURCE_FILES
         widgets/splits/SplitOverlay.hpp
         widgets/splits/PinnedMessageWidget.cpp
         widgets/splits/PinnedMessageWidget.hpp
+        widgets/splits/RaidBannerWidget.cpp
+        widgets/splits/RaidBannerWidget.hpp
         )
 
 if (APPLE)

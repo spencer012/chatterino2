@@ -1456,6 +1456,80 @@ MessagePtr MessageBuilder::makeHostingSystemMessage(const QString &channelName,
     return builder.release();
 }
 
+namespace {
+
+void appendClickableName(MessageBuilder &builder, const QString &displayName,
+                         const QString &login, const QString &suffix = {})
+{
+    builder
+        .emplace<TextElement>(displayName + suffix, MessageElementFlag::Username,
+                              MessageColor::System, FontStyle::ChatMediumBold)
+        ->setLink({Link::UserInfo, login.isEmpty() ? displayName : login});
+}
+
+}  // namespace
+
+MessagePtr MessageBuilder::makeRaidStartedMessage(
+    const QString &sourceDisplay, const QString &sourceLogin,
+    const QString &targetDisplay, const QString &targetLogin)
+{
+    MessageBuilder builder;
+    builder.emplace<TimestampElement>();
+    builder.message().flags.set(MessageFlag::System);
+    builder.message().flags.set(MessageFlag::DoNotTriggerNotification);
+
+    appendClickableName(builder, sourceDisplay, sourceLogin);
+    builder.emplace<TextElement>("started a raid to", MessageElementFlag::Text,
+                                 MessageColor::System);
+    appendClickableName(builder, targetDisplay, targetLogin, u"."_s);
+
+    auto text =
+        QString("%1 started a raid to %2.").arg(sourceDisplay, targetDisplay);
+    builder.message().messageText = text;
+    builder.message().searchText = text;
+    return builder.release();
+}
+
+MessagePtr MessageBuilder::makeRaidGoneThroughMessage(
+    const QString &targetDisplay, const QString &targetLogin)
+{
+    MessageBuilder builder;
+    builder.emplace<TimestampElement>();
+    builder.message().flags.set(MessageFlag::System);
+    builder.message().flags.set(MessageFlag::DoNotTriggerNotification);
+
+    builder.emplace<TextElement>("Raid to", MessageElementFlag::Text,
+                                 MessageColor::System);
+    appendClickableName(builder, targetDisplay, targetLogin);
+    builder.emplace<TextElement>("has gone through.", MessageElementFlag::Text,
+                                 MessageColor::System);
+
+    auto text = QString("Raid to %1 has gone through.").arg(targetDisplay);
+    builder.message().messageText = text;
+    builder.message().searchText = text;
+    return builder.release();
+}
+
+MessagePtr MessageBuilder::makeRaidCancelledMessage(
+    const QString &targetDisplay, const QString &targetLogin)
+{
+    MessageBuilder builder;
+    builder.emplace<TimestampElement>();
+    builder.message().flags.set(MessageFlag::System);
+    builder.message().flags.set(MessageFlag::DoNotTriggerNotification);
+
+    builder.emplace<TextElement>("Raid to", MessageElementFlag::Text,
+                                 MessageColor::System);
+    appendClickableName(builder, targetDisplay, targetLogin);
+    builder.emplace<TextElement>("was cancelled.", MessageElementFlag::Text,
+                                 MessageColor::System);
+
+    auto text = QString("Raid to %1 was cancelled.").arg(targetDisplay);
+    builder.message().messageText = text;
+    builder.message().searchText = text;
+    return builder.release();
+}
+
 MessagePtr MessageBuilder::makeDeletionMessageFromIRC(
     const MessagePtr &originalMessage)
 {

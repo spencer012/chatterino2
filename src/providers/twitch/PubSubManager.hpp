@@ -5,6 +5,7 @@
 #pragma once
 
 #include "providers/liveupdates/Diag.hpp"
+#include "providers/twitch/RaidInfo.hpp"
 
 #include <pajlada/signals/signal.hpp>
 #include <QJsonObject>
@@ -58,6 +59,16 @@ public:
         Signal<const QString &> unpinned;
     } pinnedChatUpdates;
 
+    struct {
+        /// Outgoing raid countdown / metadata update for a channel.
+        /// Arguments: source channel ID, raid payload.
+        pajlada::Signals::Signal<const QString &, const RaidInfo &> updated;
+        /// Emitted when the raid executes.
+        pajlada::Signals::Signal<const QString &, const RaidInfo &> gone;
+        /// Emitted when the raid is cancelled.
+        pajlada::Signals::Signal<const QString &, const RaidInfo &> cancelled;
+    } raid;
+
     /**
      * Listen to incoming channel point redemptions in the given channel.
      * This topic is relevant for everyone.
@@ -73,6 +84,14 @@ public:
      * PubSub topic: pinned-chat-updates-v1.{channelID}
      */
     void listenToPinnedChatUpdates(const QString &channelID);
+
+    /**
+     * Listen to outgoing raid events in the given channel.
+     * This topic is relevant for everyone.
+     *
+     * PubSub topic: raid.{channelID}
+     */
+    void listenToRaid(const QString &channelID);
 
     struct {
         std::atomic<uint32_t> messagesReceived{0};
