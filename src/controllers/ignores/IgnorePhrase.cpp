@@ -11,11 +11,16 @@
 namespace chatterino {
 
 IgnorePhrase::IgnorePhrase(const QString &pattern, bool isRegex, bool isBlock,
-                           const QString &replace, bool isCaseSensitive)
+                           const QString &replace, bool isCaseSensitive,
+                           bool highlightOnly, bool suppressMentions,
+                           bool suppressHighlight)
     : pattern_(pattern)
     , isRegex_(isRegex)
     , regex_(pattern)
     , isBlock_(isBlock)
+    , highlightOnly_(highlightOnly)
+    , suppressMentions_(suppressMentions)
+    , suppressHighlight_(suppressHighlight)
     , replace_(replace)
     , isCaseSensitive_(isCaseSensitive)
 {
@@ -35,9 +40,13 @@ IgnorePhrase::IgnorePhrase(const QString &pattern, bool isRegex, bool isBlock,
 bool IgnorePhrase::operator==(const IgnorePhrase &other) const
 {
     return std::tie(this->pattern_, this->isRegex_, this->isBlock_,
-                    this->replace_, this->isCaseSensitive_) ==
+                    this->highlightOnly_, this->suppressMentions_,
+                    this->suppressHighlight_, this->replace_,
+                    this->isCaseSensitive_) ==
            std::tie(other.pattern_, other.isRegex_, other.isBlock_,
-                    other.replace_, other.isCaseSensitive_);
+                    other.highlightOnly_, other.suppressMentions_,
+                    other.suppressHighlight_, other.replace_,
+                    other.isCaseSensitive_);
 }
 
 const QString &IgnorePhrase::getPattern() const
@@ -72,6 +81,21 @@ const QRegularExpression &IgnorePhrase::getRegex() const
 bool IgnorePhrase::isBlock() const
 {
     return this->isBlock_;
+}
+
+bool IgnorePhrase::highlightOnly() const
+{
+    return this->highlightOnly_;
+}
+
+bool IgnorePhrase::suppressMentions() const
+{
+    return this->suppressMentions_;
+}
+
+bool IgnorePhrase::suppressHighlight() const
+{
+    return this->suppressHighlight_;
 }
 
 const QString &IgnorePhrase::getReplace() const
@@ -120,6 +144,7 @@ IgnorePhrase IgnorePhrase::createEmpty()
 {
     return {
         {}, false, false, DEFAULT_IGNORE_PHRASE_REPLACE.toString(), true,
+        false, false, false,
     };
 }
 
