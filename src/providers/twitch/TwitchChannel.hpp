@@ -14,6 +14,7 @@
 #include "providers/ffz/FfzEmotes.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/eventsub/SubscriptionHandle.hpp"
+#include "providers/twitch/RaidInfo.hpp"
 #include "providers/twitch/TwitchEmotes.hpp"
 #include "util/QStringHash.hpp"
 #include "util/ThreadGuard.hpp"
@@ -431,6 +432,21 @@ public:
     /// Fires when the pinned message changes (set, cleared, or updated).
     pajlada::Signals::NoArgSignal pinnedMessageChanged;
 
+    /// Applies a raid_update_v2 payload (start or countdown tick).
+    void handleRaidUpdate(const RaidInfo &info);
+    /// Applies a raid_go_v2 payload.
+    void handleRaidGo(const RaidInfo &info);
+    /// Applies a raid_cancel_v2 payload.
+    void handleRaidCancel(const RaidInfo &info);
+
+    /// Returns the current raid, or null if none is in progress / just ended.
+    const RaidState *getRaidState() const;
+    /// Returns true once per raid for the auto-follow action.
+    bool tryConsumeRaidAutoFollow();
+
+    /// Fires when raid state changes (started, updated, gone, cancelled).
+    pajlada::Signals::NoArgSignal raidChanged;
+
 private:
     struct NameOptions {
         // displayName is the non-CJK-display name for this user
@@ -544,6 +560,8 @@ private:
     void pinOrUpdateMessage(bool update, const QString &messageID,
                             std::optional<std::chrono::seconds> duration,
                             const TwitchAccount &moderator, QString textHint);
+
+    void refreshRaidTargetStream();
 
     // Data
     const QString subscriptionUrl_;
@@ -672,6 +690,11 @@ private:
     /// Incremented before each getPinnedChatMessage request so that stale
     /// responses from earlier requests are discarded.
     uint64_t pinnedMessageRequestId_ = 0;
+
+    std::unique_ptr<RaidState> raidState_;
+    QString lastTerminalRaidId_;
+    bool announcedRaidGo_ = false;
+    bool announcedRaidCancel_ = false;
 
     friend class TwitchIrcServer;
     friend class MessageBuilder;

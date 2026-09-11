@@ -202,6 +202,48 @@ void PubSubClient::handleMessageResponse(const PubSubMessageMessage &message)
         return;
     }
 
+    if (message.topic.startsWith("raid."))
+    {
+        auto oInnerMessage = message.toInner<PubSubRaidMessage>();
+        if (!oInnerMessage)
+        {
+            qCDebug(chatterinoPubSub) << "Malformed raid message";
+            return;
+        }
+
+        const auto &innerMessage = *oInnerMessage;
+        const auto channelId = message.topic.sliced(
+            static_cast<qsizetype>(sizeof("raid.") - 1));
+
+        switch (innerMessage.type)
+        {
+            case PubSubRaidMessage::Type::Update: {
+                this->manager_.raid.updated.invoke(channelId,
+                                                   innerMessage.raid);
+            }
+            break;
+
+            case PubSubRaidMessage::Type::Go: {
+                this->manager_.raid.gone.invoke(channelId, innerMessage.raid);
+            }
+            break;
+
+            case PubSubRaidMessage::Type::Cancel: {
+                this->manager_.raid.cancelled.invoke(channelId,
+                                                     innerMessage.raid);
+            }
+            break;
+
+            case PubSubRaidMessage::Type::INVALID:
+            default: {
+                qCDebug(chatterinoPubSub)
+                    << "Invalid raid event type:" << innerMessage.typeString;
+            }
+            break;
+        }
+        return;
+    }
+
     if (!message.topic.startsWith("community-points-channel-v1."))
     {
         return;

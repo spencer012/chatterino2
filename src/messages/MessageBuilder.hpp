@@ -180,6 +180,14 @@ public:
     static MessagePtr makeOfflineSystemMessage(const HelixMinimalUser &channel);
     static MessagePtr makeHostingSystemMessage(const QString &channelName,
                                                bool hostOn);
+    static MessagePtr makeRaidStartedMessage(const QString &sourceDisplay,
+                                             const QString &sourceLogin,
+                                             const QString &targetDisplay,
+                                             const QString &targetLogin);
+    static MessagePtr makeRaidGoneThroughMessage(const QString &targetDisplay,
+                                                 const QString &targetLogin);
+    static MessagePtr makeRaidCancelledMessage(const QString &targetDisplay,
+                                               const QString &targetLogin);
     static MessagePtr makeDeletionMessageFromIRC(
         const MessagePtr &originalMessage);
     static MessagePtr makeListOfUsersMessage(QString prefix, QStringList users,
