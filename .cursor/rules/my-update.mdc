@@ -42,8 +42,9 @@ This is a fork of an existing open source project with some custom functionality
    - **Behavior Notes**:
      - Toggle is restricted to normal Twitch channel splits (`Twitch`/`TwitchWatching`) and ignored in non-channel/special splits.
      - Prediction uses time decay and per-user dedupe, is capitalization-agnostic for grouping, and preserves dominant capitalization variant for display.
+     - Only ordinary user chat is scored. Channel-point redeems, highlighted redeems, announcements, watch streaks, notifications, and other non-chat events are ignored so redeem floods cannot dilute or starve a winner.
      - Initial winner can be immediate; later winner changes require confirmation window plus blank buffer before swap.
-     - Prediction loop runs only for visible split tabs and analyzes a capped recent-message count (`crowdCopyMaxMessagesToAnalyze`, default 100).
+     - Prediction loop runs only for visible split tabs and analyzes a capped recent **user-message** count (`crowdCopyMaxMessagesToAnalyze`, default 100), over-fetching the snapshot so ignored events do not consume the cap.
      - While chat control is enabled, input is read-only and is cleared on disable.
      - `Ctrl+R` and chat control are mutually exclusive; reverse search activation is swallowed while chat control is on.
      - Reverse search now toggles closed on repeated `Ctrl+R`, with explicit handling to avoid shortcut routing issues.
@@ -131,6 +132,7 @@ This is a fork of an existing open source project with some custom functionality
    - **Behavior Notes**:
      - Banner is shown only when the split is on-screen (`QWidget::isVisible()`), including unfocused windows; background tabs are ignored.
      - First `raid_update_v2` per raid id posts "X started a raid to Y." Countdown ticks do not repeat that message.
+     - Banner countdown is anchored to the first update's `force_raid_now_seconds`; later PubSub ticks keep that origin because Twitch repeats a fixed 90s value.
      - `raid_go_v2` / `raid_cancel_v2` post "gone through" / "cancelled" messages in the source channel, once per raid (Twitch can emit go multiple times).
      - Raid system-message names are clickable UserInfo links, matching live/offline/hosting notices.
      - Auto checkbox starts unchecked for each raid and only stays checked if the user clicks it. When checked, the banner jumps to an existing target split or opens a new main-window tab when the raid executes, once per raid from a visible split.
