@@ -8,7 +8,6 @@
 #include "singletons/Settings.hpp"
 
 #include <QRandomGenerator>
-#include <QTime>
 
 #include <cmath>
 #include <limits>
@@ -37,17 +36,6 @@ double messageAgeSeconds(const MessagePtr &message, const QDateTime &now)
     if (message->serverReceivedTime.isValid())
     {
         return message->serverReceivedTime.msecsTo(now) / 1000.0;
-    }
-
-    if (message->parseTime.isValid())
-    {
-        int seconds = message->parseTime.secsTo(QTime::currentTime());
-        // Crossing midnight yields a negative delta, normalize to same-day age.
-        if (seconds < 0)
-        {
-            seconds += 24 * 60 * 60;
-        }
-        return static_cast<double>(seconds);
     }
 
     return std::numeric_limits<double>::infinity();
