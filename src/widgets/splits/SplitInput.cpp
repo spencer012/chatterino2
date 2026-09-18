@@ -1631,8 +1631,12 @@ void SplitInput::crowdCopyTick()
     const auto now = QDateTime::currentDateTimeUtc();
     const auto maxMessages = std::max(
         getSettings()->crowdCopyMaxMessagesToAnalyze.getValue(), 1);
+    // Over-fetch so ignored non-chat messages (redeems, etc.) don't starve the
+    // user-message cap applied inside CrowdCopyEngine.
+    const auto fetchCount =
+        static_cast<size_t>(std::max(maxMessages * 10, maxMessages));
     const auto result = CrowdCopyEngine::evaluate(
-        channel->getMessageSnapshot(static_cast<size_t>(maxMessages)), now);
+        channel->getMessageSnapshot(fetchCount), now);
     auto winner = result.text;
 
     // Keep the current case variant stable if the winner only differs by capitalization.

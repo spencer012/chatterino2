@@ -20,10 +20,21 @@ using namespace chatterino;
 
 bool shouldIgnoreMessage(const MessagePtr &message)
 {
-    if (message->flags.hasAny({MessageFlag::System, MessageFlag::Timeout,
-                               MessageFlag::Subscription,
-                               MessageFlag::ModerationAction, MessageFlag::Whisper,
-                               MessageFlag::AutoMod, MessageFlag::ClearChat}))
+    // Crowd copy only considers ordinary user chat. Channel-point redeems,
+    // highlights, announcements, and other non-chat events would otherwise
+    // dilute the winner when they outnumber real messages.
+    if (message->flags.hasAny(
+            {MessageFlag::System, MessageFlag::Timeout, MessageFlag::Subscription,
+             MessageFlag::ModerationAction, MessageFlag::Whisper,
+             MessageFlag::AutoMod, MessageFlag::ClearChat, MessageFlag::Disabled,
+             MessageFlag::RedeemedChannelPointReward,
+             MessageFlag::RedeemedHighlight, MessageFlag::Announcement,
+             MessageFlag::WatchStreak, MessageFlag::UncategorizedNotification}))
+    {
+        return true;
+    }
+
+    if (message->reward)
     {
         return true;
     }
@@ -85,6 +96,8 @@ CrowdCopyResult CrowdCopyEngine::evaluate(const std::vector<MessagePtr> &message
     const auto minimumUsers = settings->crowdCopyMinUsers.getValue();
     const auto minimumRatio =
         static_cast<double>(settings->crowdCopyMinRatio.getValue());
+    const auto maxMessages =
+        std::max(settings->crowdCopyMaxMessagesToAnalyze.getValue(), 1);
 
     struct WeightedMessage {
         QString text;
@@ -137,6 +150,11 @@ CrowdCopyResult CrowdCopyEngine::evaluate(const std::vector<MessagePtr> &message
             {.text = normalizedText,
              .caseInsensitiveKey = normalizedText.toCaseFolded(),
              .weight = decayWeight(ageSeconds, halfLifeSeconds)});
+
+        if (static_cast<int>(weightedMessages.size()) >= maxMessages)
+        {
+            break;
+        }
     }
 
     if (weightedMessages.empty())

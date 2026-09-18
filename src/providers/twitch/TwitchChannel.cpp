@@ -2811,9 +2811,24 @@ void TwitchChannel::handleRaidUpdate(const RaidInfo &info)
         this->announcedRaidCancel_ = false;
     }
 
+    const auto startedAt = this->raidState_->lastUpdateAt;
+    const int existingForce = this->raidState_->info.forceRaidNowSeconds;
     this->raidState_->info = info;
     this->raidState_->phase = RaidPhase::Active;
-    this->raidState_->lastUpdateAt = QDateTime::currentDateTimeUtc();
+    // Twitch repeats raid_update_v2 with a fixed force_raid_now_seconds
+    // (usually 90). Keep the first timestamp so the banner can count down.
+    if (startedAt.isValid())
+    {
+        this->raidState_->lastUpdateAt = startedAt;
+        if (existingForce > 0)
+        {
+            this->raidState_->info.forceRaidNowSeconds = existingForce;
+        }
+    }
+    else
+    {
+        this->raidState_->lastUpdateAt = QDateTime::currentDateTimeUtc();
+    }
 
     if (isNewRaid && !this->raidState_->announcedStart)
     {
