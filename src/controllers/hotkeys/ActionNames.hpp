@@ -291,6 +291,7 @@ inline const std::map<HotkeyCategory, ActionDefinitionMap> actionNames{
           }},
          {"openMessageHistory",
           ActionDefinition{"Search message history (reverse search)"}},
+         {"toggleCrowdCopy", ActionDefinition{"Toggle Crowd Copy mode"}},
 
      }},
     {HotkeyCategory::Window,

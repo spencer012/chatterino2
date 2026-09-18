@@ -24,3 +24,25 @@ This is a fork of an existing open source project with some custom functionality
      - Current text in input is preserved when opening/closing search.
      - Non-contiguous duplicate messages are collapsed when filtering.
 
+2. **Crowd Copy (Per-Split Ctrl+D Toggle)**
+   - **Feature**: Per-split toggle that analyzes recent chat messages and prefills the split input with a likely crowd message. Uses time-decayed scoring, per-user deduplication, and a confirmation/buffer state machine to avoid rapid accidental sends.
+   - **Files Added**:
+     - `src/controllers/crowdcopy/CrowdCopyEngine.hpp/.cpp` - Stateless evaluator for candidate messages. Normalizes text (trim + invisible format char removal), deduplicates by user, applies exponential decay, and selects winner using threshold settings.
+   - **Files Modified**:
+     - `src/widgets/splits/SplitInput.hpp/.cpp` - Added per-split Crowd Copy state/timers, `setCrowdCopyEnabled()`, periodic evaluation, 500ms confirmation logic, 200ms blank switch buffer, and active visual indicator.
+     - `src/widgets/splits/Split.hpp/.cpp` - Added `setCrowdCopyMode()` / `getCrowdCopyMode()` and delegated placeholder updates through `SplitInput`.
+     - `src/controllers/hotkeys/ActionNames.hpp` - Added `toggleCrowdCopy` action.
+     - `src/controllers/hotkeys/HotkeyController.cpp` - Added default `Ctrl+D` binding for `toggleCrowdCopy`.
+     - `src/common/WindowDescriptors.hpp/.cpp` - Added `crowdCopyMode_` descriptor field and JSON loading.
+     - `src/singletons/WindowManager.cpp` - Persisted `crowdCopyMode` in split layout serialization.
+     - `src/widgets/splits/SplitContainer.cpp` - Applied persisted crowd copy mode when restoring split layouts.
+     - `src/singletons/Settings.hpp` - Added tunable Crowd Copy settings (`timeWindowSec`, `minUsers`, `minRatio`, `decayHalfLifeSec`, `updateIntervalMs`, `switchBufferMs`, `confirmationMs`).
+     - `src/widgets/settingspages/GeneralPage.cpp` - Added advanced settings UI section for Crowd Copy tuning.
+     - `src/CMakeLists.txt` - Added Crowd Copy source files.
+   - **Behavior Notes**:
+     - Toggle is restricted to `Twitch` / `TwitchWatching` split types (not mentions/live/whispers/automod/misc).
+     - Winner changes require consecutive hold for `crowdCopyConfirmationMs` before switching; the old winner remains shown while candidates flicker.
+     - First non-empty winner after activation appears immediately when current text is empty.
+     - Confirmed switches use a blank period of `crowdCopySwitchBufferMs` before new text appears.
+     - Disabling Crowd Copy leaves the current input text unchanged.
+

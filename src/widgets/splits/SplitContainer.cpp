@@ -884,6 +884,7 @@ void SplitContainer::applyFromDescriptorRecursively(
         auto *split = new Split(this);
         split->setChannel(splitNode.decodeChannel());
         split->setModerationMode(splitNode.moderationMode_);
+        split->setCrowdCopyMode(splitNode.crowdCopyMode_);
         split->setFilters(splitNode.filters_);
         split->setCheckSpellingOverride(splitNode.spellCheckOverride);
 
@@ -921,6 +922,7 @@ void SplitContainer::applyFromDescriptorRecursively(
                 split->setFilters(splitNode.filters_);
                 split->setChannel(splitNode.decodeChannel());
                 split->setModerationMode(splitNode.moderationMode_);
+                split->setCrowdCopyMode(splitNode.crowdCopyMode_);
                 split->setCheckSpellingOverride(splitNode.spellCheckOverride);
 
                 auto node = std::make_shared<Node>();
