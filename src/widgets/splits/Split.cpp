@@ -696,7 +696,7 @@ void Split::updateInputPlaceholder()
                                        ->getUserName());
     }
 
-    this->input_->ui_.textEdit->setPlaceholderText(placeholderText);
+    this->input_->setPlaceholderText(placeholderText);
 }
 
 void Split::joinChannelInNewTab(const ChannelPtr &channel)
@@ -869,6 +869,17 @@ void Split::setModerationMode(bool value)
 bool Split::getModerationMode() const
 {
     return this->moderationMode_;
+}
+
+void Split::setCrowdCopyMode(bool value)
+{
+    this->input_->setCrowdCopyEnabled(value);
+    getApp()->getWindows()->queueSave();
+}
+
+bool Split::getCrowdCopyMode() const
+{
+    return this->input_->isCrowdCopyEnabled();
 }
 
 std::optional<bool> Split::checkSpellingOverride() const
@@ -1063,6 +1074,7 @@ void Split::popup()
 
     split->setChannel(this->getIndirectChannel());
     split->setModerationMode(this->getModerationMode());
+    split->setCrowdCopyMode(this->getCrowdCopyMode());
     split->setFilters(this->getFilters());
 
     window.getNotebook().getOrAddSelectedPage()->insertSplit(split);
