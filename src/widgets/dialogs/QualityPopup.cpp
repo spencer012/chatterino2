@@ -8,6 +8,7 @@
 #include "common/QLogging.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/StreamLink.hpp"
+#include "util/StreamQualitySort.hpp"
 #include "widgets/Window.hpp"
 
 namespace chatterino {
@@ -41,6 +42,10 @@ QualityPopup::QualityPopup(const QString &url, QStringList options)
 
 void QualityPopup::showDialog(const QString &url, QStringList options)
 {
+    // Streamlink and TwitchPipe can both return unsorted names. Rank them
+    // once here so every Choose popup shares the same order.
+    options = sortStreamQualities(std::move(options));
+
     QualityPopup *instance = new QualityPopup(url, options);
 
     instance->window()->setWindowTitle("Chatterino - select stream quality");

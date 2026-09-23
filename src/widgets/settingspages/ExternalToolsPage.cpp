@@ -21,6 +21,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QVBoxLayout>
 
 #include <algorithm>
 
@@ -31,6 +32,16 @@ namespace {
 inline const QStringList STREAMLINK_QUALITY = {
     "Choose", "Source", "High", "Medium", "Low", "Audio only",
 };
+
+QLabel *makeWrappedLabel(const QString &text)
+{
+    auto *label = new QLabel(text);
+    label->setWordWrap(true);
+    label->setTextInteractionFlags(Qt::TextBrowserInteraction |
+                                   Qt::LinksAccessibleByKeyboard);
+    label->setOpenExternalLinks(true);
+    return label;
+}
 
 void exportImageUploaderSettings(QWidget *parent)
 {
@@ -111,20 +122,22 @@ bool ExternalToolsPage::filterElements(const QString &query)
     return false;
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void ExternalToolsPage::initLayout(GeneralPageView &layout)
 {
     auto &s = *getSettings();
 
     {
-        auto *form = new QFormLayout;
-        layout.addTitle("Streamlink");
-        layout.addDescription("Streamlink is a command-line utility that pipes "
-                              "video streams from "
-                              "various services into a video player, such as "
-                              "VLC. Make sure to edit "
-                              "the configuration file before you use it!");
-        layout.addDescription(
+        layout.addTitle("Stream player");
+
+        SettingWidget::dropdown("Stream player", s.streamPlayerBackend)
+            ->addTo(layout);
+
+        const QString streamlinkDescription =
+            QStringLiteral("Streamlink is a command-line utility that pipes "
+                           "video streams from various services into a video "
+                           "player, such as VLC. Make sure to edit the "
+                           "configuration file before you use it!");
+        const QString streamlinkLinks =
             formatRichNamedLink("https://streamlink.github.io/", "Website") +
             " " +
             formatRichNamedLink(
@@ -132,31 +145,120 @@ void ExternalToolsPage::initLayout(GeneralPageView &layout)
                 "Download") +
             " " +
             formatRichNamedLink("https://streamlink.github.io/cli.html#twitch",
-                                "Documentation"));
-
-        SettingWidget::checkbox("Use custom path (Enable if using non-standard "
-                                "streamlink installation path)",
-                                s.streamlinkUseCustomPath)
-            ->addTo(layout);
-
-        layout.addDescription(
+                                "Documentation");
+        const QString streamlinkBinaryNote =
             QStringLiteral(
                 "Chatterino expects the executable to be called \"%1\".")
-                .arg(STREAMLINK_BINARY_NAME));
+                .arg(STREAMLINK_BINARY_NAME);
+        const QString streamlinkPathLabel =
+            QStringLiteral("Use custom path (Enable if using non-standard "
+                           "streamlink installation path)");
 
-        layout.addLayout(form);
+        auto *streamlinkBox = new QGroupBox(QStringLiteral("Streamlink"));
+        auto *streamlinkOuter = new QVBoxLayout(streamlinkBox);
+        auto *streamlinkForm = new QFormLayout;
+        streamlinkForm->setContentsMargins(0, 0, 0, 0);
+        streamlinkOuter->addWidget(makeWrappedLabel(streamlinkDescription));
+        streamlinkOuter->addWidget(makeWrappedLabel(streamlinkLinks));
+        // addTo() registers the checkbox for search and inserts it in the page
+        // layout. Reparent it into this group afterwards.
+        auto *streamlinkPathCheck = SettingWidget::checkbox(
+            streamlinkPathLabel, s.streamlinkUseCustomPath);
+        streamlinkPathCheck->addTo(layout);
+        streamlinkOuter->addWidget(streamlinkPathCheck);
+        streamlinkOuter->addWidget(makeWrappedLabel(streamlinkBinaryNote));
+        streamlinkOuter->addLayout(streamlinkForm);
 
         SettingWidget::lineEdit(
             "Custom streamlink path", s.streamlinkPath,
             "Path to folder where Streamlink executable can be found")
             ->conditionallyEnabledBy(s.streamlinkUseCustomPath)
-            ->addTo(layout, form);
+            ->addTo(layout, streamlinkForm);
 
         SettingWidget::dropdown("Preferred quality", s.preferredQuality)
-            ->addTo(layout, form);
+            ->addTo(layout, streamlinkForm);
 
         SettingWidget::lineEdit("Additional options", s.streamlinkOpts, "")
-            ->addTo(layout, form);
+            ->addTo(layout, streamlinkForm);
+
+        layout.addWidget(
+            streamlinkBox,
+            {QStringLiteral("Streamlink"), streamlinkDescription,
+             streamlinkLinks, streamlinkBinaryNote, streamlinkPathLabel,
+             QStringLiteral("Custom streamlink path"),
+             QStringLiteral("Preferred quality"),
+             QStringLiteral("Additional options")});
+
+        const QString twitchpipeDescription = QStringLiteral(
+            "TwitchPipe plays a Twitch stream in your video player. Choose "
+            "runs twitchpipe --log-level error --streams and lists one quality "
+            "name per line. Those names are passed through when you launch.");
+        const QString twitchpipeBinaryNote =
+            QStringLiteral(
+                "Chatterino expects the executable to be called \"%1\".")
+                .arg(TWITCHPIPE_BINARY_NAME);
+        const QString twitchpipePathLabel = QStringLiteral("Use custom path");
+
+        auto *twitchpipeBox = new QGroupBox(QStringLiteral("TwitchPipe"));
+        auto *twitchpipeOuter = new QVBoxLayout(twitchpipeBox);
+        auto *twitchpipeForm = new QFormLayout;
+        twitchpipeForm->setContentsMargins(0, 0, 0, 0);
+        twitchpipeOuter->addWidget(makeWrappedLabel(twitchpipeDescription));
+        twitchpipeOuter->addWidget(makeWrappedLabel(twitchpipeBinaryNote));
+        auto *twitchpipePathCheck = SettingWidget::checkbox(
+            twitchpipePathLabel, s.twitchpipeUseCustomPath);
+        twitchpipePathCheck->addTo(layout);
+        twitchpipeOuter->addWidget(twitchpipePathCheck);
+        twitchpipeOuter->addLayout(twitchpipeForm);
+
+        SettingWidget::lineEdit(
+            "Custom twitchpipe path", s.twitchpipePath,
+            "Path to folder where the TwitchPipe executable can be found")
+            ->conditionallyEnabledBy(s.twitchpipeUseCustomPath)
+            ->addTo(layout, twitchpipeForm);
+
+        SettingWidget::dropdown("Preferred quality", s.twitchpipeQuality)
+            ->addTo(layout, twitchpipeForm);
+
+        SettingWidget::lineEdit("Quality priority list",
+                                s.twitchpipeQualityPriority,
+                                "1080p60,720p60,best")
+            ->addKeywords({QStringLiteral("1080p60,720p60,best")})
+            ->conditionallyEnabledBy(s.twitchpipeQuality,
+                                     TwitchPipeQuality::Custom)
+            ->addTo(layout, twitchpipeForm);
+
+        SettingWidget::lineEdit(
+            "Config file", s.twitchpipeConfigPath,
+            "Optional: path to config.toml (default: next to the executable)")
+            ->addKeywords({QStringLiteral("config.toml")})
+            ->addTo(layout, twitchpipeForm);
+
+        SettingWidget::lineEdit("Additional options", s.twitchpipeOpts, "")
+            ->addTo(layout, twitchpipeForm);
+
+        layout.addWidget(
+            twitchpipeBox,
+            {QStringLiteral("TwitchPipe"), twitchpipeDescription,
+             twitchpipeBinaryNote, twitchpipePathLabel,
+             QStringLiteral("Custom twitchpipe path"),
+             QStringLiteral("Preferred quality"),
+             QStringLiteral("Quality priority list"),
+             QStringLiteral("1080p60,720p60,best"),
+             QStringLiteral("Config file"), QStringLiteral("config.toml"),
+             QStringLiteral("--streams"),
+             QStringLiteral("Additional options")});
+
+        s.streamPlayerBackend.connect(
+            [streamlinkBox, twitchpipeBox](const QString &) {
+                const auto backend =
+                    getSettings()->streamPlayerBackend.getEnum();
+                streamlinkBox->setEnabled(backend ==
+                                          StreamPlayerBackend::Streamlink);
+                twitchpipeBox->setEnabled(backend ==
+                                          StreamPlayerBackend::TwitchPipe);
+            },
+            this->managedConnections_);
     }
 
     {
