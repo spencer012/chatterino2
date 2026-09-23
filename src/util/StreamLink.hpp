@@ -20,18 +20,21 @@ public:
 
 #ifdef Q_OS_WIN
 constexpr inline QStringView STREAMLINK_BINARY_NAME = u"streamlink.exe";
+constexpr inline QStringView TWITCHPIPE_BINARY_NAME = u"twitchpipe.exe";
 #else
 constexpr inline QStringView STREAMLINK_BINARY_NAME = u"streamlink";
+constexpr inline QStringView TWITCHPIPE_BINARY_NAME = u"twitchpipe";
 #endif
 
-// Open streamlink for given url, quality and extra arguments
-// the "Additional arguments" are fetched and added at the beginning of the
-// streamlink call
+// Open the selected stream player for the given url, quality, and extra
+// arguments. Additional options from settings are appended.
+// The player binary is chosen from settings at call time.
 void openStreamlink(const QString &url, const QString &quality,
                     QStringList extraArguments = QStringList());
 
-// Start opening streamlink for the given channel or url, reading settings like quality
-// from settings and opening a quality dialog if the quality is "Choose"
+// Start opening the selected stream player for the given channel or url.
+// Reads that player's quality setting and opens a quality dialog when the
+// quality is "Choose".
 void openStreamlinkForChannelOrUrl(const QString &channelOrUrl);
 
 }  // namespace chatterino

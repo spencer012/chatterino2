@@ -137,3 +137,27 @@ This is a fork of an existing open source project with some custom functionality
      - Raid system-message names are clickable UserInfo links, matching live/offline/hosting notices.
      - Auto checkbox starts unchecked for each raid and only stays checked if the user clicks it. When checked, the banner jumps to an existing target split or opens a new main-window tab when the raid executes, once per raid from a visible split.
 
+8. **TwitchPipe stream player backend**
+   - **Feature**: External Tools has a Stream player choice between Streamlink and TwitchPipe. TwitchPipe has its own path, quality, config file, and extra options. Choose quality runs `twitchpipe --streams` and reuses the existing quality popup.
+   - **Files Modified**:
+     - `src/singletons/Settings.hpp` - `StreamPlayerBackend` and `TwitchPipeQuality` settings, plus magic_enum display names for the TwitchPipe quality values.
+     - `src/util/StreamLink.hpp/.cpp` - Backend-aware binary path, not-found dialog, process setup, `--streams` listing, and argument building. `openStreamlink` and `openStreamlinkForChannelOrUrl` stay the public API.
+     - `src/widgets/dialogs/QualityPopup.cpp` - `showDialog` sorts the option list before filling the combo box.
+     - `src/widgets/settingspages/SettingWidget.hpp/.cpp` - `conditionallyEnabledBy(EnumStringSetting<T>&, T)` and dropdown instantiations for the new enums.
+     - `src/widgets/settingspages/ExternalToolsPage.cpp` - Stream player section with a backend dropdown and Streamlink / TwitchPipe groups. The page uses `SettingsPage::managedConnections_` for the enable binding.
+     - `tests/CMakeLists.txt` - Registers `tests/src/StreamLink.cpp`.
+   - **Files Added**:
+     - `src/util/StreamQualitySort.hpp/.cpp` - `sortStreamQualities` ranks Choose-popup labels for both backends.
+     - `tests/src/StreamLink.cpp` - Order checks for Choose-popup quality labels.
+   - **Behavior Notes**:
+     - Quality listing runs `twitchpipe --log-level error --streams <channel>`, optionally with `--config` when the config path is set. Each non-empty stdout line is one quality. Streamlink still parses the `Available streams:` line and strips its ` (best)` / ` (worst)` markers before the popup sees the names.
+     - Both Choose popups run that list through `sortStreamQualities` in `QualityPopup::showDialog`. Resolution labels go highest height first, and a higher frame rate breaks a tie (`1080p60` before `1080p`, `720p60` before `720p`). A trailing ` (...)` suffix such as ` (source)` is ignored for rank and kept on the selectable string. `best` is first, unrecognized labels keep their relative order, `worst` follows those, and `audio`, `audio_only`, and `audio-only` are last. Duplicate labels are kept.
+     - Non-zero exit posts the last stderr line as a system message on the split that started the launch, and logs a warning. Offline channels typically end with `Error: no streams found on channel X`.
+     - A bare login is passed through. A URL with no scheme, including `twitch.tv/<name>`, gets `https://` prepended. That rewrite also happens inside `openStreamlink` when TwitchPipe is the backend at launch time, so the quality popup follows the backend selected when OK is clicked.
+     - Preferred quality maps to `best`, no quality argument (config priority list), or the custom priority string. An empty custom list falls back to `best`. Popup quality names are passed through unchanged, including labels like `1080p60 (source)`.
+     - `--config` is sent only when the config file setting is non-empty. Otherwise TwitchPipe uses its own lookup, next to the executable and then the working directory.
+     - A normal Streamlink launch still gets the same arguments. The chat system message is `Opening <channel> in Streamlink ...` or `Opening <channel> in TwitchPipe ...`.
+     - Attached quality queries are deleted when they exit. FailedToStart shows one not-found dialog and deletes the process. Detached launches use `startDetached`, show that dialog only from the false return, and delete the `QProcess` without waiting for the player to exit.
+     - Holding Shift while starting a launch with quality `Choose` skips the popup and uses `best` for both backends. Hotkeys whose binding lacks Shift will not fire with Shift held, so menu and button triggers are the intended path.
+     - The menu label "Open in streamlink", the `/streamlink` command, and the `openInStreamlink` hotkey id are unchanged.
+

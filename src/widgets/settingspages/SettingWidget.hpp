@@ -124,6 +124,11 @@ public:
         conditionallyEnabledBy(QStringSetting &setting,
                                const QString &expectedValue);
 
+    /// Conditionally enable the widget if the given enum setting equals expectedValue
+    template <typename T>
+    [[nodiscard("Must use created setting widget")]] SettingWidget *
+        conditionallyEnabledBy(EnumStringSetting<T> &setting, T expectedValue);
+
     void addTo(GeneralPageView &view);
     void addTo(GeneralPageView &view, QFormLayout *formLayout);
 

@@ -250,6 +250,10 @@ template SettingWidget *SettingWidget::dropdown<EmoteTooltipScale>(
 template SettingWidget *SettingWidget::dropdown<StreamLinkPreferredQuality>(
     const QString &label,
     EnumStringSetting<StreamLinkPreferredQuality> &setting);
+template SettingWidget *SettingWidget::dropdown<StreamPlayerBackend>(
+    const QString &label, EnumStringSetting<StreamPlayerBackend> &setting);
+template SettingWidget *SettingWidget::dropdown<TwitchPipeQuality>(
+    const QString &label, EnumStringSetting<TwitchPipeQuality> &setting);
 template SettingWidget *SettingWidget::dropdown<ChatSendProtocol>(
     const QString &label, EnumStringSetting<ChatSendProtocol> &setting);
 template SettingWidget *SettingWidget::dropdown<TabStyle>(
@@ -615,6 +619,23 @@ SettingWidget *SettingWidget::conditionallyEnabledBy(
 
     return this;
 }
+
+template <typename T>
+SettingWidget *SettingWidget::conditionallyEnabledBy(
+    EnumStringSetting<T> &setting, T expectedValue)
+{
+    setting.connect(
+        [this, expectedValue, &setting](const QString &) {
+            this->actionWidget->setEnabled(setting.getEnum() == expectedValue);
+        },
+        this->managedConnections);
+
+    return this;
+}
+
+template SettingWidget *SettingWidget::conditionallyEnabledBy<
+    TwitchPipeQuality>(EnumStringSetting<TwitchPipeQuality> &setting,
+                       TwitchPipeQuality expectedValue);
 
 void SettingWidget::addTo(GeneralPageView &view)
 {
