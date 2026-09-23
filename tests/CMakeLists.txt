@@ -79,6 +79,7 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/controllers/plugins/PluginTestApp.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/controllers/plugins/LuaUtilitiesTest.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/Contributors.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/StreamLink.cpp
     # Add your new file above this line!
 
     ${CMAKE_CURRENT_LIST_DIR}/src/lib/Snapshot.cpp

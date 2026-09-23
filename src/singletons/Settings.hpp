@@ -94,6 +94,18 @@ enum class StreamLinkPreferredQuality : std::uint8_t {
     AudioOnly,
 };
 
+enum class StreamPlayerBackend : std::uint8_t {
+    Streamlink,
+    TwitchPipe,
+};
+
+enum class TwitchPipeQuality : std::uint8_t {
+    Choose,
+    Best,
+    ConfigDefault,
+    Custom,
+};
+
 enum class TabStyle : std::uint8_t {
     Normal,
     Compact,
@@ -623,6 +635,26 @@ public:
     };
     QStringSetting streamlinkOpts = {"/external/streamlink/options", ""};
 
+    // TwitchPipe custom path is a directory, like Streamlink.
+    EnumStringSetting<StreamPlayerBackend> streamPlayerBackend = {
+        "/external/streamplayer/backend",
+        StreamPlayerBackend::Streamlink,
+    };
+    BoolSetting twitchpipeUseCustomPath = {"/external/twitchpipe/useCustomPath",
+                                           false};
+    QStringSetting twitchpipePath = {"/external/twitchpipe/customPath", ""};
+    EnumStringSetting<TwitchPipeQuality> twitchpipeQuality = {
+        "/external/twitchpipe/quality",
+        TwitchPipeQuality::Choose,
+    };
+    QStringSetting twitchpipeQualityPriority = {
+        "/external/twitchpipe/qualityPriority",
+        "",
+    };
+    QStringSetting twitchpipeConfigPath = {"/external/twitchpipe/configPath",
+                                           ""};
+    QStringSetting twitchpipeOpts = {"/external/twitchpipe/options", ""};
+
     // Custom URI Scheme
     QStringSetting customURIScheme = {"/external/urischeme"};
 
@@ -871,6 +903,29 @@ constexpr magic_enum::customize::customize_t
 
         case chatterino::StreamLinkPreferredQuality::AudioOnly:
             return "Audio only";
+
+        default:
+            return default_tag;
+    }
+}
+
+template <>
+constexpr magic_enum::customize::customize_t
+    magic_enum::customize::enum_name<chatterino::TwitchPipeQuality>(
+        chatterino::TwitchPipeQuality value) noexcept
+{
+    using chatterino::TwitchPipeQuality;
+    switch (value)
+    {
+        case TwitchPipeQuality::Choose:
+        case TwitchPipeQuality::Best:
+            return default_tag;
+
+        case TwitchPipeQuality::ConfigDefault:
+            return "Config priority list";
+
+        case TwitchPipeQuality::Custom:
+            return "Custom priority list";
 
         default:
             return default_tag;
