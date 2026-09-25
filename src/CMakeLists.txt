@@ -84,6 +84,10 @@ set(SOURCE_FILES
         controllers/channelpoints/ChannelPointsModels.hpp
         controllers/crowdcopy/CrowdCopyEngine.cpp
         controllers/crowdcopy/CrowdCopyEngine.hpp
+        controllers/replay/ReplayController.cpp
+        controllers/replay/ReplayController.hpp
+        controllers/replay/ReplayServer.cpp
+        controllers/replay/ReplayServer.hpp
 
         controllers/commands/builtin/chatterino/Debugging.cpp
         controllers/commands/builtin/chatterino/Debugging.hpp

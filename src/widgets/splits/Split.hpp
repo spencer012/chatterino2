@@ -13,6 +13,7 @@
 #include <QFont>
 #include <QPointer>
 #include <QShortcut>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -74,6 +75,8 @@ public:
     bool getCrowdCopyMode() const;
     void setInputHidden(bool value);
     bool getInputHidden() const;
+    bool replayChatEnabled() const;
+    void toggleReplayChat();
 
     std::optional<bool> checkSpellingOverride() const;
     void setCheckSpellingOverride(std::optional<bool> override);
@@ -139,6 +142,9 @@ private:
     void handleModifiers(Qt::KeyboardModifiers modifiers);
     void updateInputPlaceholder();
     void addShortcuts() override;
+    void onReplayPosition(const QString &instanceId);
+    void onReplayRemoved(const QString &instanceId);
+    void advanceReplayScroll();
 
     /**
      * @brief Opens a Twitch channel's stream in your default browser's player (opens a formatted link)
@@ -175,6 +181,15 @@ private:
 
     bool isMouseOver_{};
     bool isDragging_{};
+    bool replayEnabled_{};
+    bool replayLive_{};
+    bool replayNeedsLiveScroll_{};
+    bool replayPlayerPaused_{};
+    bool replaySeekPending_{};
+    int replayOutsideReports_{};
+    qint64 replayWallMs_{};
+    QString replayInstanceId_;
+    QTimer replayStepTimer_;
 
     QVBoxLayout *const vbox_;
     SplitHeader *const header_;
