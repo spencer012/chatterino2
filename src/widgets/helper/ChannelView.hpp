@@ -26,6 +26,9 @@
 
 #include <unordered_map>
 #include <unordered_set>
+#include <optional>
+#include <utility>
+#include <vector>
 
 namespace chatterino {
 enum class HighlightState;
@@ -131,6 +134,10 @@ public:
      * @return <code>true</code> if the message was found and highlighted.
      */
     bool scrollToMessageId(const QString &id);
+    // Returns whether the displayed message has caught up to wallMs.
+    bool scrollToServerTime(qint64 wallMs, size_t maxMessagesPerStep = 0);
+    void resetReplayScroll();
+    void setReplayChatMode(bool enabled);
 
     /// Pausing
     bool pausable() const;
@@ -299,6 +306,7 @@ private:
 
     void performLayout(bool causedByScrollbar = false,
                        bool disableAnimation = false);
+    void updateGoToBottomVisibility();
     void layoutVisibleMessages(const std::vector<MessageLayoutPtr> &messages);
     void updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
                          bool causedByScrollbar, bool disableAnimation);
@@ -413,6 +421,8 @@ private:
     // "Show latest messages" button
     bool showingLatestMessages_ = true;
     bool enableScrollingToBottom_ = true;
+    bool replayChatMode_ = false;
+    bool replayManualReading_ = false;
 
     bool onlyUpdateEmotes_ = false;
 
@@ -450,6 +460,11 @@ private:
     const Context context_;
 
     LimitedQueue<MessageLayoutPtr> messages_;
+    std::vector<std::pair<qint64, size_t>> replayTimeIndex_;
+    std::optional<size_t> replayCursorIndex_;
+    MessageLayout *replayFirst_ = nullptr;
+    MessageLayout *replayLast_ = nullptr;
+    size_t replaySnapshotSize_ = 0;
 
     pajlada::Signals::SignalHolder signalHolder_;
 

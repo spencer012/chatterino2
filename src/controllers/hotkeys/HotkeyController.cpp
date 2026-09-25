@@ -388,6 +388,9 @@ void HotkeyController::addDefaults(std::set<QString> &addedHotkeys)
                             std::vector<QString>(),
                             "show channel points popup");
         this->tryAddDefault(addedHotkeys, HotkeyCategory::Split,
+                            QKeySequence("Ctrl+Alt+R"), "toggleReplayChat",
+                            std::vector<QString>(), "toggle replay chat");
+        this->tryAddDefault(addedHotkeys, HotkeyCategory::Split,
                             QKeySequence("Ctrl+Shift+F"), "showGlobalSearch",
                             std::vector<QString>(), "show global search");
         this->tryAddDefault(addedHotkeys, HotkeyCategory::Split,
