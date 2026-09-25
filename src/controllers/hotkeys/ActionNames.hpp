@@ -185,6 +185,7 @@ inline const std::map<HotkeyCategory, ActionDefinitionMap> actionNames{
           }},
          {"showSearch", ActionDefinition{"Search current channel"}},
          {"showChannelPoints", ActionDefinition{"Open channel points popup"}},
+         {"toggleReplayChat", ActionDefinition{"Toggle replay chat from player"}},
          {"showGlobalSearch", ActionDefinition{"Search all channels"}},
          {"debug", ActionDefinition{"Show debug popup"}},
          {"popupOverlay", ActionDefinition{"New overlay popup"}},

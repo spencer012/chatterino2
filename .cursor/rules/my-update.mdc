@@ -161,3 +161,11 @@ This is a fork of an existing open source project with some custom functionality
      - Holding Shift while starting a launch with quality `Choose` skips the popup and uses `best` for both backends. Hotkeys whose binding lacks Shift will not fire with Shift held, so menu and button triggers are the intended path.
      - The menu label "Open in streamlink", the `/streamlink` command, and the `openInStreamlink` hotkey id are unchanged.
 
+9. **Replay chat via mpv**
+   - TwitchPipe sends HLS segment program-date ends through its byte buffer, observes mpv IPC playback and cache timestamps, and reports mapped wall-clock positions over a reconnecting websocket client. Its `[replay]` config defaults to disabled.
+   - `src/controllers/replay/ReplayServer.hpp/.cpp` listens on localhost port 38776 by default, and `ReplayController.hpp/.cpp` tracks player instances by channel. `Application` exposes the controller; `EmptyApplication` returns null.
+   - `ChannelView::scrollToServerTime` uses the filtered snapshot and a cached timestamp index. Routine replay scroll advances by at most five messages per 50 ms step; explicit seeks jump straight to the requested time. `Split` binds to one player per Twitch channel, snaps to normal live scrolling with 15/20 second hysteresis, and shows green, blue, or orange borders for replay, live, or waiting.
+   - Ctrl+Alt+R and the split More menu toggle replay. External Tools contains the listener port and live thresholds. Replay mode is per split and is cleared on channel changes.
+   - Replay-follow suppresses "More messages below". Pausing chat and scrolling manually restores it; normal mode retains its existing banner behavior. TwitchPipe logs connection changes to mpv's backtick console, including changes before the console first opens.
+   - When TwitchPipe uses `player.no_close = true`, its replay reporter remains active after the stream ends and stops only after mpv exits, so cached-video seeks keep moving chat.
+

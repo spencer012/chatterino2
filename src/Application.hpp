@@ -67,6 +67,7 @@ class IController;
 class SpellChecker;
 class ChatHistoryManager;
 class ChannelPointsController;
+class ReplayController;
 
 class IApplication
 {
@@ -124,6 +125,7 @@ public:
     virtual SpellChecker *getSpellChecker() = 0;
     virtual ChatHistoryManager *getChatHistoryManager() = 0;
     virtual ChannelPointsController *getChannelPoints() = 0;
+    virtual ReplayController *getReplay() = 0;
 };
 
 class Application : public IApplication
@@ -167,6 +169,7 @@ private:
     std::unique_ptr<AccountController> accounts;
     std::unique_ptr<eventsub::IController> eventSub;
     std::unique_ptr<HotkeyController> hotkeys;
+    std::unique_ptr<ReplayController> replay;
     std::unique_ptr<WindowManager> windows;
     std::unique_ptr<Toasts> toasts;
     std::unique_ptr<ImageUploader> imageUploader;
@@ -253,6 +256,7 @@ public:
     SpellChecker *getSpellChecker() override;
     ChatHistoryManager *getChatHistoryManager() override;
     ChannelPointsController *getChannelPoints() override;
+    ReplayController *getReplay() override;
 
 private:
     void initNm(const Modes &modes, const Paths &paths);

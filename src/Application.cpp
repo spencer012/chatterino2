@@ -10,6 +10,7 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/chathistory/ChatHistoryManager.hpp"
 #include "controllers/channelpoints/ChannelPointsController.hpp"
+#include "controllers/replay/ReplayController.hpp"
 #include "controllers/commands/Command.hpp"
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/highlights/HighlightController.hpp"
@@ -164,6 +165,7 @@ Application::Application(Settings &_settings, const Paths &paths,
     , accounts(new AccountController)
     , eventSub(new eventsub::Controller())
     , hotkeys(new HotkeyController)
+    , replay(new ReplayController(_settings))
     , windows(new WindowManager(_args, paths, _settings, *this->themes,
                                 *this->fonts))
     , toasts(new Toasts)
@@ -620,6 +622,11 @@ ChannelPointsController *Application::getChannelPoints()
     return this->channelPoints.get();
 }
 
+ReplayController *Application::getReplay()
+{
+    return this->replay.get();
+}
+
 void Application::aboutToQuit()
 {
     ABOUT_TO_QUIT.store(true);
@@ -668,6 +675,7 @@ void Application::stop()
     this->imageUploader.reset();
     this->toasts.reset();
     this->windows.reset();
+    this->replay.reset();
     this->hotkeys.reset();
     this->eventSub.reset();
     this->accounts.reset();

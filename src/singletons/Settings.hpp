@@ -779,6 +779,10 @@ public:
     QStringSetting twitchpipeConfigPath = {"/external/twitchpipe/configPath",
                                            ""};
     QStringSetting twitchpipeOpts = {"/external/twitchpipe/options", ""};
+    BoolSetting replayServerEnabled = {"/external/replay/enabled", true};
+    IntSetting replayServerPort = {"/external/replay/port", 38776};
+    IntSetting replayLiveEnterMs = {"/external/replay/liveEnterMs", 15000};
+    IntSetting replayLiveExitMs = {"/external/replay/liveExitMs", 20000};
 
     // Custom URI Scheme
     QStringSetting customURIScheme = {"/external/urischeme"};

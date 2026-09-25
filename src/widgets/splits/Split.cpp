@@ -12,6 +12,7 @@
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "controllers/notifications/NotificationController.hpp"
+#include "controllers/replay/ReplayController.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
@@ -108,6 +109,20 @@ Split::Split(QWidget *parent)
 
     this->vbox_->setSpacing(0);
     this->vbox_->setContentsMargins(1, 1, 1, 1);
+    this->replayStepTimer_.setInterval(50);
+    QObject::connect(&this->replayStepTimer_, &QTimer::timeout, this,
+                     &Split::advanceReplayScroll);
+    if (auto *replay = getApp()->getReplay())
+    {
+        this->signalHolder_.managedConnect(
+            replay->positionUpdated, [this](const QString &id) {
+                this->onReplayPosition(id);
+            });
+        this->signalHolder_.managedConnect(
+            replay->instanceRemoved, [this](const QString &id) {
+                this->onReplayRemoved(id);
+            });
+    }
 
     this->vbox_->addWidget(this->header_);
     this->vbox_->addWidget(this->pinnedBanner_);
@@ -276,6 +291,11 @@ void Split::addShortcuts()
         {"showChannelPoints",
          [this](const std::vector<QString> &) -> QString {
              this->openChannelPointsPopup();
+             return "";
+         }},
+        {"toggleReplayChat",
+         [this](const std::vector<QString> &) -> QString {
+             this->toggleReplayChat();
              return "";
          }},
         {"toggleInputVisibility",
@@ -807,6 +827,10 @@ ChannelPtr Split::getChannel() const
 
 void Split::setChannel(IndirectChannel newChannel)
 {
+    if (this->replayEnabled_)
+    {
+        this->toggleReplayChat();
+    }
     this->channel_ = newChannel;
 
     this->view_->setChannel(newChannel.get());
@@ -985,6 +1009,206 @@ void Split::paintEvent(QPaintEvent *)
     QPainter painter(this);
 
     painter.fillRect(this->rect(), this->theme->splits.background);
+    if (this->replayEnabled_)
+    {
+        const QColor border = this->replayInstanceId_.isEmpty()
+                                  ? QColor(220, 145, 55)
+                                  : this->replayLive_ ? QColor(76, 137, 185)
+                                                      : QColor(62, 170, 99);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(border, 2));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(this->rect().adjusted(1, 1, -2, -2), 3, 3);
+    }
+}
+
+bool Split::replayChatEnabled() const
+{
+    return this->replayEnabled_;
+}
+
+void Split::toggleReplayChat()
+{
+    if (!this->replayEnabled_ &&
+        this->getChannel()->getType() != Channel::Type::Twitch)
+    {
+        return;
+    }
+    this->replayEnabled_ = !this->replayEnabled_;
+    this->replayLive_ = false;
+    this->replayNeedsLiveScroll_ = false;
+    this->replayPlayerPaused_ = false;
+    this->replaySeekPending_ = false;
+    this->replayOutsideReports_ = 0;
+    this->replayWallMs_ = 0;
+    this->replayStepTimer_.stop();
+    this->view_->resetReplayScroll();
+    this->view_->setReplayChatMode(this->replayEnabled_);
+    if (this->replayEnabled_)
+    {
+        if (auto *replay = getApp()->getReplay())
+        {
+            this->replayInstanceId_ = replay->latestInstanceForChannel(
+                this->getChannel()->getName());
+        }
+        this->vbox_->setContentsMargins(2, 2, 2, 2);
+        if (!this->replayInstanceId_.isEmpty())
+        {
+            this->onReplayPosition(this->replayInstanceId_);
+        }
+    }
+    else
+    {
+        this->replayInstanceId_.clear();
+        this->vbox_->setContentsMargins(1, 1, 1, 1);
+    }
+    this->update();
+}
+
+void Split::onReplayPosition(const QString &instanceId)
+{
+    if (!this->replayEnabled_)
+    {
+        return;
+    }
+    auto *replay = getApp()->getReplay();
+    if (!replay)
+    {
+        return;
+    }
+    const auto *position = replay->instance(instanceId);
+    if (!position || position->channel.compare(this->getChannel()->getName(),
+                                               Qt::CaseInsensitive) != 0)
+    {
+        return;
+    }
+    if (this->replayInstanceId_.isEmpty())
+    {
+        this->replayInstanceId_ = instanceId;
+        this->update();
+    }
+    if (this->replayInstanceId_ != instanceId || position->liveMs == 0 ||
+        position->wallMs == 0)
+    {
+        return;
+    }
+
+    const bool wasLive = this->replayLive_;
+    const qint64 behindMs = position->liveMs - position->wallMs;
+    if (this->replayLive_)
+    {
+        if (behindMs > getSettings()->replayLiveExitMs)
+        {
+            ++this->replayOutsideReports_;
+            if (position->seeked || this->replayOutsideReports_ >= 2)
+            {
+                this->replayLive_ = false;
+                this->replayNeedsLiveScroll_ = false;
+                this->replayOutsideReports_ = 0;
+                this->update();
+            }
+        }
+        else
+        {
+            this->replayOutsideReports_ = 0;
+        }
+    }
+    else if (behindMs <= getSettings()->replayLiveEnterMs)
+    {
+        this->replayLive_ = true;
+        this->replayNeedsLiveScroll_ = true;
+        this->replayOutsideReports_ = 0;
+        this->update();
+    }
+    if (this->replayLive_ && !wasLive)
+    {
+        this->view_->resetReplayScroll();
+        this->replayStepTimer_.stop();
+    }
+    if (this->replayLive_ && this->replayNeedsLiveScroll_ &&
+        !this->view_->paused())
+    {
+        this->view_->getScrollBar().scrollToBottom();
+        this->replayNeedsLiveScroll_ = false;
+    }
+    if (this->replayLive_)
+    {
+        if (this->replayNeedsLiveScroll_ && !this->replayStepTimer_.isActive())
+        {
+            this->replayStepTimer_.start();
+        }
+        return;
+    }
+
+    this->replayWallMs_ = position->wallMs;
+    this->replayPlayerPaused_ = position->paused;
+    this->replaySeekPending_ |= position->seeked;
+    if (!this->replayStepTimer_.isActive())
+    {
+        this->replayStepTimer_.start();
+        this->advanceReplayScroll();
+    }
+}
+
+void Split::advanceReplayScroll()
+{
+    if (!this->replayEnabled_ || this->replayInstanceId_.isEmpty())
+    {
+        this->replayStepTimer_.stop();
+        return;
+    }
+    if (this->replayLive_)
+    {
+        if (this->replayNeedsLiveScroll_ && !this->view_->paused())
+        {
+            this->view_->getScrollBar().scrollToBottom();
+            this->replayNeedsLiveScroll_ = false;
+        }
+        if (!this->replayNeedsLiveScroll_)
+        {
+            this->replayStepTimer_.stop();
+        }
+        return;
+    }
+    if (this->replayWallMs_ == 0)
+    {
+        this->replayStepTimer_.stop();
+        return;
+    }
+    if (this->replaySeekPending_ && this->view_->paused())
+    {
+        return;
+    }
+    const bool caughtUp = this->view_->scrollToServerTime(
+        this->replayWallMs_, this->replaySeekPending_ ? 0 : 5);
+    this->replaySeekPending_ = false;
+    if (caughtUp && this->replayPlayerPaused_)
+    {
+        this->replayStepTimer_.stop();
+    }
+}
+
+void Split::onReplayRemoved(const QString &instanceId)
+{
+    if (!this->replayEnabled_ || this->replayInstanceId_ != instanceId)
+    {
+        return;
+    }
+    this->replayInstanceId_.clear();
+    this->replayLive_ = false;
+    this->replayNeedsLiveScroll_ = false;
+    this->replayPlayerPaused_ = false;
+    this->replaySeekPending_ = false;
+    this->replayOutsideReports_ = 0;
+    this->replayWallMs_ = 0;
+    this->replayStepTimer_.stop();
+    this->view_->resetReplayScroll();
+    if (auto *replay = getApp()->getReplay())
+    {
+        this->replayInstanceId_ = replay->latestInstanceForChannel(
+            this->getChannel()->getName());
+    }
+    this->update();
 }
 
 void Split::mouseMoveEvent(QMouseEvent *event)

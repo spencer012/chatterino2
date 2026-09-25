@@ -249,6 +249,37 @@ void ExternalToolsPage::initLayout(GeneralPageView &layout)
              QStringLiteral("--streams"),
              QStringLiteral("Additional options")});
 
+        auto *replayBox = new QGroupBox(QStringLiteral("Replay chat"));
+        auto *replayOuter = new QVBoxLayout(replayBox);
+        replayOuter->addWidget(makeWrappedLabel(
+            "A TwitchPipe player can send its stream time to Chatterino. "
+            "Enable [replay] in TwitchPipe's config, then toggle replay on "
+            "a Twitch split with Ctrl+Alt+R."));
+        auto *replayForm = new QFormLayout;
+        replayForm->setContentsMargins(0, 0, 0, 0);
+        replayOuter->addLayout(replayForm);
+        auto *replayEnabledCheck = SettingWidget::checkbox(
+            "Accept replay connections", s.replayServerEnabled);
+        replayEnabledCheck->addTo(layout);
+        replayOuter->insertWidget(1, replayEnabledCheck);
+        SettingWidget::intInput("Listen port", s.replayServerPort,
+                                {.min = 1, .max = 65535})
+            ->addTo(layout, replayForm);
+        SettingWidget::intInput("Enter live within (ms)",
+                                s.replayLiveEnterMs,
+                                {.min = 0, .max = 600000})
+            ->addTo(layout, replayForm);
+        SettingWidget::intInput("Leave live beyond (ms)",
+                                s.replayLiveExitMs,
+                                {.min = 0, .max = 600000})
+            ->addTo(layout, replayForm);
+        layout.addWidget(replayBox,
+                         {QStringLiteral("Replay chat"),
+                          QStringLiteral("Accept replay connections"),
+                          QStringLiteral("Listen port"),
+                          QStringLiteral("Enter live within (ms)"),
+                          QStringLiteral("Leave live beyond (ms)")});
+
         s.streamPlayerBackend.connect(
             [streamlinkBox, twitchpipeBox](const QString &) {
                 const auto backend =

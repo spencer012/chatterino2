@@ -408,6 +408,13 @@ void ChannelView::initializeScrollbar()
             this->layoutQueued_ = true;
         }
     });
+    std::ignore = this->scrollBar_->getDesiredValueChanged().connect([this] {
+        if (this->replayChatMode_ && this->paused())
+        {
+            this->replayManualReading_ = true;
+            this->updateGoToBottomVisibility();
+        }
+    });
 }
 
 void ChannelView::initializeSignals()
@@ -599,6 +606,9 @@ void ChannelView::updatePauses()
 
 void ChannelView::unpaused()
 {
+    this->replayManualReading_ = false;
+    this->updateGoToBottomVisibility();
+
     /// Move selection
     this->selection_.shiftMessageIndex(this->pauseSelectionOffset_);
     this->doubleClickSelection_.shiftMessageIndex(this->pauseSelectionOffset_);
@@ -704,9 +714,15 @@ void ChannelView::performLayout(bool causedByScrollbar, bool disableAnimation)
     /// Update scrollbar
     this->updateScrollbar(messages, causedByScrollbar, disableAnimation);
 
-    this->goToBottom_->setVisible(this->enableScrollingToBottom_ &&
-                                  this->scrollBar_->isVisible() &&
-                                  !this->scrollBar_->isAtBottom());
+    this->updateGoToBottomVisibility();
+}
+
+void ChannelView::updateGoToBottomVisibility()
+{
+    this->goToBottom_->setVisible(
+        this->enableScrollingToBottom_ && this->scrollBar_->isVisible() &&
+        !this->scrollBar_->isAtBottom() &&
+        (!this->replayChatMode_ || (this->paused() && this->replayManualReading_)));
 }
 
 void ChannelView::layoutVisibleMessages(
@@ -814,6 +830,11 @@ void ChannelView::updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
 
 void ChannelView::clearMessages()
 {
+    this->replayTimeIndex_.clear();
+    this->resetReplayScroll();
+    this->replayFirst_ = nullptr;
+    this->replayLast_ = nullptr;
+    this->replaySnapshotSize_ = 0;
     // Clear all stored messages in this chat widget
     this->messages_.clear();
     this->scrollBar_->clearHighlights();
@@ -1121,6 +1142,11 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
 
 void ChannelView::setFilters(const QList<QUuid> &ids)
 {
+    this->replayTimeIndex_.clear();
+    this->resetReplayScroll();
+    this->replayFirst_ = nullptr;
+    this->replayLast_ = nullptr;
+    this->replaySnapshotSize_ = 0;
     this->channelFilters_ = std::make_shared<FilterSet>(ids);
 
     this->updateID();
@@ -1560,6 +1586,123 @@ void ChannelView::scrollToMessageLayout(MessageLayout *layout,
         this->getScrollBar().setDesiredValue(this->scrollBar_->getMinimum() +
                                              qreal(messageIdx));
     }
+}
+
+void ChannelView::resetReplayScroll()
+{
+    this->replayCursorIndex_.reset();
+}
+
+void ChannelView::setReplayChatMode(bool enabled)
+{
+    this->replayChatMode_ = enabled;
+    this->replayManualReading_ = false;
+    this->updateGoToBottomVisibility();
+}
+
+bool ChannelView::scrollToServerTime(qint64 wallMs,
+                                     size_t maxMessagesPerStep)
+{
+    if (this->paused())
+    {
+        return false;
+    }
+    auto &snapshot = this->getMessagesSnapshot();
+    if (snapshot.empty())
+    {
+        return true;
+    }
+    const bool unchanged = this->replayFirst_ == snapshot.front().get() &&
+                           this->replayLast_ == snapshot.back().get() &&
+                           this->replaySnapshotSize_ == snapshot.size();
+    if (!unchanged)
+    {
+        const bool appended = this->replaySnapshotSize_ > 0 &&
+                              this->replayFirst_ == snapshot.front().get() &&
+                              this->replaySnapshotSize_ < snapshot.size() &&
+                              snapshot[this->replaySnapshotSize_ - 1].get() ==
+                                  this->replayLast_;
+        if (!appended)
+        {
+            this->replayTimeIndex_.clear();
+            this->resetReplayScroll();
+        }
+        for (size_t i = appended ? this->replaySnapshotSize_ : 0;
+             i < snapshot.size(); ++i)
+        {
+            const auto &time = snapshot[i]->getMessagePtr()->serverReceivedTime;
+            if (time.isValid())
+            {
+                this->replayTimeIndex_.emplace_back(time.toMSecsSinceEpoch(), i);
+            }
+        }
+        this->replayFirst_ = snapshot.front().get();
+        this->replayLast_ = snapshot.back().get();
+        this->replaySnapshotSize_ = snapshot.size();
+    }
+    if (this->replayTimeIndex_.empty())
+    {
+        return true;
+    }
+    const auto it = std::upper_bound(
+        this->replayTimeIndex_.begin(), this->replayTimeIndex_.end(), wallMs,
+        [](qint64 time, const auto &entry) { return time < entry.first; });
+    const bool atEnd = it == this->replayTimeIndex_.end();
+    const size_t target = atEnd
+                              ? this->replayTimeIndex_.back().second
+                              : it == this->replayTimeIndex_.begin()
+                                    ? 0
+                                    : std::prev(it)->second;
+    size_t displayed = target;
+    if (maxMessagesPerStep > 0 && this->replayCursorIndex_)
+    {
+        const size_t previous = *this->replayCursorIndex_;
+        if (target > previous && target - previous > maxMessagesPerStep)
+        {
+            displayed = previous + maxMessagesPerStep;
+        }
+        else if (previous > target &&
+                 previous - target > maxMessagesPerStep)
+        {
+            displayed = previous - maxMessagesPerStep;
+        }
+    }
+    this->replayCursorIndex_ = displayed;
+    const bool caughtUp = displayed == target;
+    if (atEnd && caughtUp)
+    {
+        this->scrollBar_->scrollToBottom();
+        return true;
+    }
+    qreal remaining = this->height();
+    qreal desired = static_cast<qreal>(displayed + 1);
+    for (size_t i = displayed + 1; i > 0 && remaining > 0;)
+    {
+        --i;
+        auto &message = snapshot[i];
+        message->layout(
+            {.messageColors = this->messageColors_,
+             .flags = this->getFlags(),
+             .width = this->getLayoutWidth(),
+             .scale = this->scale(),
+             .imageScale = this->scale() *
+                           static_cast<float>(this->devicePixelRatio())},
+            false);
+        const qreal messageHeight = std::max<qreal>(1, message->getHeight());
+        if (remaining < messageHeight)
+        {
+            desired = static_cast<qreal>(i) +
+                      (messageHeight - remaining) / messageHeight;
+            remaining = 0;
+        }
+        else
+        {
+            remaining -= messageHeight;
+            desired = static_cast<qreal>(i);
+        }
+    }
+    this->scrollBar_->setDesiredValue(this->scrollBar_->getMinimum() + desired);
+    return caughtUp;
 }
 
 void ChannelView::paintEvent(QPaintEvent *event)

@@ -13,6 +13,10 @@ namespace chatterino::mock {
 class EmptyApplication : public IApplication
 {
 public:
+    ReplayController *getReplay() override
+    {
+        return nullptr;
+    }
     EmptyApplication() = default;
 
     explicit EmptyApplication(const QString &settingsData)

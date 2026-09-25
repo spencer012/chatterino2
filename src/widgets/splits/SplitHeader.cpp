@@ -615,6 +615,15 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
 
     // sub menu
     auto *moreMenu = new QMenu("More", this);
+    if (this->split_->getChannel()->getType() == Channel::Type::Twitch)
+    {
+        auto *replayAction = moreMenu->addAction(
+            "Replay chat from player",
+            h->getDisplaySequence(HotkeyCategory::Split, "toggleReplayChat"),
+            this->split_, &Split::toggleReplayChat);
+        replayAction->setCheckable(true);
+        replayAction->setChecked(this->split_->replayChatEnabled());
+    }
 
     auto modModeSeq = h->getDisplaySequence(HotkeyCategory::Split,
                                             "setModerationMode", {{"toggle"}});
