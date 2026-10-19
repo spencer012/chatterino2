@@ -266,6 +266,46 @@ void Helix::getStreamByName(QString userName,
         failureCallback, finallyCallback);
 }
 
+void Helix::getLatestArchiveVideo(
+    QString userId, ResultCallback<std::optional<HelixVideo>> successCallback,
+    std::function<void(QString)> failureCallback)
+{
+    QUrlQuery urlQuery;
+    urlQuery.addQueryItem("user_id", userId);
+    urlQuery.addQueryItem("type", "archive");
+    urlQuery.addQueryItem("first", "1");
+
+    this->makeGet("videos", urlQuery)
+        .onSuccess([successCallback, failureCallback](auto result) {
+            auto root = result.parseJson();
+            if (root.empty())
+            {
+                failureCallback("Bad JSON response");
+                return;
+            }
+            const auto first = root.value("data").toArray().at(0);
+            if (!first.isObject())
+            {
+                successCallback(std::nullopt);
+                return;
+            }
+            successCallback(HelixVideo(first.toObject()));
+        })
+        .onError([failureCallback](auto result) {
+            auto root = result.parseJson();
+            if (root.empty())
+            {
+                failureCallback("Unknown error");
+                return;
+            }
+
+            // Forward "message" from Twitch
+            HelixError error(root);
+            failureCallback(error.message);
+        })
+        .execute();
+}
+
 ///
 
 void Helix::fetchGames(QStringList gameIds, QStringList gameNames,

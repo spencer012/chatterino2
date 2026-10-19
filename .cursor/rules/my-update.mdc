@@ -169,3 +169,7 @@ This is a fork of an existing open source project with some custom functionality
    - Replay-follow suppresses "More messages below". Pausing chat and scrolling manually restores it; normal mode retains its existing banner behavior. TwitchPipe logs connection changes to mpv's backtick console, including changes before the console first opens.
    - When TwitchPipe uses `player.no_close = true`, its replay reporter remains active after the stream ends and stops only after mpv exits, so cached-video seeks keep moving chat.
 
+10. **Open most recent VOD in mpv**
+   - The Twitch split header menu has "Open most recent VOD", below "Open in streamlink". It runs `mpv <vod url>` detached, using `mpv` from PATH with no other arguments.
+   - `Helix::getLatestArchiveVideo` (`src/providers/twitch/api/Helix.hpp/.cpp`, mock in `mocks/include/mocks/Helix.hpp`) fetches `videos?type=archive&first=1` for the channel's room ID. `Split::openLatestVodInMpv` reports missing VODs, Helix errors, and mpv launch failures as system messages.
+

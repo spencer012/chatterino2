@@ -205,6 +205,19 @@ struct HelixClip {
     }
 };
 
+struct HelixVideo {
+    QString id;
+    QString url;
+    QString title;
+
+    explicit HelixVideo(QJsonObject jsonObject)
+        : id(jsonObject.value("id").toString())
+        , url(jsonObject.value("url").toString())
+        , title(jsonObject.value("title").toString())
+    {
+    }
+};
+
 struct HelixChannel {
     QString userId;
     QString name;
@@ -838,6 +851,12 @@ public:
         HelixFailureCallback failureCallback,
         std::function<void()> finallyCallback) = 0;
 
+    // https://dev.twitch.tv/docs/api/reference#get-videos
+    virtual void getLatestArchiveVideo(
+        QString userId,
+        ResultCallback<std::optional<HelixVideo>> successCallback,
+        std::function<void(QString)> failureCallback) = 0;
+
     // https://dev.twitch.tv/docs/api/reference#get-games
     virtual void fetchGames(
         QStringList gameIds, QStringList gameNames,
@@ -1303,6 +1322,12 @@ public:
                          ResultCallback<bool, HelixStream> successCallback,
                          HelixFailureCallback failureCallback,
                          std::function<void()> finallyCallback) final;
+
+    // https://dev.twitch.tv/docs/api/reference#get-videos
+    void getLatestArchiveVideo(
+        QString userId,
+        ResultCallback<std::optional<HelixVideo>> successCallback,
+        std::function<void(QString)> failureCallback) final;
 
     // https://dev.twitch.tv/docs/api/reference#get-games
     void fetchGames(QStringList gameIds, QStringList gameNames,

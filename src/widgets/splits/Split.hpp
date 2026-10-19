@@ -230,6 +230,7 @@ public Q_SLOTS:
     void openBrowserPlayer();
     void openBrowserChat();
     void openInStreamlink();
+    void openLatestVodInMpv();
     void openWithCustomScheme();
     void setFiltersDialog();
     void showSearch(bool singleChannel);
