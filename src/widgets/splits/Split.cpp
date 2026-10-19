@@ -13,6 +13,7 @@
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "controllers/notifications/NotificationController.hpp"
 #include "controllers/replay/ReplayController.hpp"
+#include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
@@ -55,6 +56,7 @@
 #include <QMimeData>
 #include <QMovie>
 #include <QPainter>
+#include <QProcess>
 #include <QSet>
 #include <QVBoxLayout>
 
@@ -1415,6 +1417,47 @@ void Split::openModViewInBrowser()
 void Split::openInStreamlink()
 {
     this->openChannelInStreamlink(this->getChannel()->getName());
+}
+
+void Split::openLatestVodInMpv()
+{
+    auto channel = this->getChannel();
+    auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get());
+    if (twitchChannel == nullptr)
+    {
+        return;
+    }
+    if (twitchChannel->roomId().isEmpty())
+    {
+        channel->addSystemMessage("Channel ID is not loaded yet.");
+        return;
+    }
+
+    std::weak_ptr<Channel> weak = channel;
+    getHelix()->getLatestArchiveVideo(
+        twitchChannel->roomId(),
+        [weak](const std::optional<HelixVideo> &video) {
+            auto channel = weak.lock();
+            if (!video || video->url.isEmpty())
+            {
+                if (channel)
+                {
+                    channel->addSystemMessage("This channel has no VODs.");
+                }
+                return;
+            }
+            if (!QProcess::startDetached("mpv", {video->url}) && channel)
+            {
+                channel->addSystemMessage(
+                    "Failed to start mpv. Is it on your PATH?");
+            }
+        },
+        [weak](const QString &error) {
+            if (auto channel = weak.lock())
+            {
+                channel->addSystemMessage("Failed to fetch VOD: " + error);
+            }
+        });
 }
 
 void Split::openWithCustomScheme()

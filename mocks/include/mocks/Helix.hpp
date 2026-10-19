@@ -47,6 +47,12 @@ public:
                  std::function<void()> finallyCallback),
                 (override));
 
+    MOCK_METHOD(void, getLatestArchiveVideo,
+                (QString userId,
+                 ResultCallback<std::optional<HelixVideo>> successCallback,
+                 std::function<void(QString)> failureCallback),
+                (override));
+
     MOCK_METHOD(void, getStreamById,
                 (QString userId,
                  (ResultCallback<bool, HelixStream> successCallback),

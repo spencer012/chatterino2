@@ -519,6 +519,8 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
             OPEN_IN_STREAMLINK,
             h->getDisplaySequence(HotkeyCategory::Split, "openInStreamlink"),
             this->split_, &Split::openInStreamlink);
+        menu->addAction("Open most recent VOD", this->split_,
+                        &Split::openLatestVodInMpv);
 
         if (!getSettings()->customURIScheme.getValue().isEmpty())
         {
