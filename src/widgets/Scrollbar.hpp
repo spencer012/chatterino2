@@ -4,6 +4,13 @@
 
 #pragma once
 
+#include <QPixmap>
+
+#include <cstdint>
+#include <map>
+
+class QPainter;
+
 #include "widgets/BaseWidget.hpp"
 #include "widgets/helper/ScrollbarHighlight.hpp"
 
@@ -102,6 +109,7 @@ public:
     void replaceHighlight(size_t index, ScrollbarHighlight replacement);
 
     void clearHighlights();
+    void setMessageLimit(size_t limit);
 
     void scrollToBottom(bool animate = false);
     void scrollToTop(bool animate = false);
@@ -159,6 +167,7 @@ public:
     Q_PROPERTY(qreal desiredValue_ READ getDesiredValue WRITE setDesiredValue)
 
 protected:
+    void themeChangedEvent() override;
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
@@ -187,6 +196,12 @@ private:
     QPropertyAnimation currentValueAnimation_;
 
     boost::circular_buffer<ScrollbarHighlight> highlights_;
+    std::map<int64_t, ScrollbarHighlight> highlightMarkers_;
+    int64_t highlightOffset_ = 0;
+    QPixmap highlightLayer_;
+    bool highlightLayerDirty_ = true;
+    void rebuildHighlightMarkers();
+    void paintHighlights(QPainter &painter);
 
     bool atBottom_{true};
     /// This takes precedence over `settingHideThumb`

@@ -4,11 +4,77 @@
 
 #include "messages/LimitedQueue.hpp"
 
+#include "messages/MessageViewQueue.hpp"
 #include "Test.hpp"
 
 #include <vector>
 
 using namespace chatterino;
+
+TEST(LimitedQueue, SnapshotRevisionTracksWrapReplacementAndClear)
+{
+    LimitedQueue<int> queue(2);
+    std::vector<int> snapshot;
+    uint64_t revision = 0;
+    EXPECT_TRUE(queue.getSnapshotIfChanged(snapshot, revision));
+    EXPECT_FALSE(queue.getSnapshotIfChanged(snapshot, revision));
+    queue.pushBack(1);
+    queue.pushBack(2);
+    ASSERT_TRUE(queue.getSnapshotIfChanged(snapshot, revision));
+    EXPECT_EQ(snapshot, (std::vector<int>{1, 2}));
+    queue.pushBack(3);
+    ASSERT_TRUE(queue.getSnapshotIfChanged(snapshot, revision));
+    EXPECT_EQ(snapshot, (std::vector<int>{2, 3}));
+    queue.replaceItem(size_t{0}, 4);
+    ASSERT_TRUE(queue.getSnapshotIfChanged(snapshot, revision));
+    EXPECT_EQ(snapshot, (std::vector<int>{4, 3}));
+    queue.clear();
+    ASSERT_TRUE(queue.getSnapshotIfChanged(snapshot, revision));
+    EXPECT_TRUE(snapshot.empty());
+}
+
+TEST(LimitedQueue, ResizeWrappedQueueKeepsNewestAndReportsEvictions)
+{
+    LimitedQueue<int> queue(4);
+    for (int i = 0; i < 7; ++i)
+    {
+        queue.pushBack(i);
+    }
+    EXPECT_EQ(queue.setLimit(2), (std::vector<int>{3, 4}));
+    EXPECT_EQ(queue.getSnapshot(), (std::vector<int>{5, 6}));
+    EXPECT_TRUE(queue.setLimit(6).empty());
+    queue.pushBack(7);
+    EXPECT_EQ(queue.getSnapshot(), (std::vector<int>{5, 6, 7}));
+    queue.replaceAll({1, 2, 3, 4, 5, 6, 7});
+    EXPECT_EQ(queue.getSnapshot(), (std::vector<int>{2, 3, 4, 5, 6, 7}));
+    queue.replaceAll({8, 9});
+    EXPECT_EQ(queue.limit(), 6);
+    EXPECT_FALSE(queue.pushBack(10));
+}
+
+TEST(MessageViewQueue, LiveRingAndFrozenCopyHaveIndependentLifetimes)
+{
+    MessageViewQueue<std::shared_ptr<int>> queue(3);
+    auto oldest = std::make_shared<int>(1);
+    std::weak_ptr<int> lifetime = oldest;
+    queue.pushBack(oldest);
+    oldest.reset();
+    queue.pushBack(std::make_shared<int>(2));
+    queue.pushBack(std::make_shared<int>(3));
+    auto frozen = queue.live();
+    queue.pushBack(std::make_shared<int>(4));
+    EXPECT_EQ(*queue.live().front(), 2);
+    EXPECT_EQ(*frozen.front(), 1);
+    EXPECT_FALSE(lifetime.expired());
+    frozen.clear();
+    EXPECT_TRUE(lifetime.expired());
+    auto removed = queue.setLimit(1);
+    ASSERT_EQ(removed.size(), 2);
+    EXPECT_EQ(*queue.live().front(), 4);
+    queue.setLimit(4);
+    queue.pushBack(std::make_shared<int>(5));
+    EXPECT_EQ(queue.live().size(), 2);
+}
 
 template <typename T>
 inline void SNAPSHOT_EQUALS(const std::vector<T> &snapshot,

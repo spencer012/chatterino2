@@ -40,6 +40,12 @@ int maxUncollapsedLines()
 
 namespace chatterino {
 
+void MessageLayoutContainer::clearLayout()
+{
+    decltype(this->elements_){}.swap(this->elements_);
+    decltype(this->lines_){}.swap(this->lines_);
+}
+
 void MessageLayoutContainer::beginLayout(qreal width, float scale,
                                          float imageScale, MessageFlags flags)
 {

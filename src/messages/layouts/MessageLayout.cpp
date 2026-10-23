@@ -431,9 +431,8 @@ void MessageLayout::deleteCache()
 {
     this->deleteBuffer();
 
-#ifdef XD
-    this->container_.clear();
-#endif
+    this->container_.clearLayout();
+    this->flags.set(MessageLayoutFlag::RequiresLayout);
 }
 
 // Elements

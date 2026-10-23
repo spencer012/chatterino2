@@ -9,6 +9,7 @@
 #include "messages/LimitedQueue.hpp"
 #include "messages/MessageFlag.hpp"
 #include "messages/MessageSink.hpp"
+#include "util/QStringHash.hpp"
 
 #include <magic_enum/magic_enum.hpp>
 #include <pajlada/signals/signal.hpp>
@@ -18,6 +19,7 @@
 
 #include <memory>
 #include <optional>
+#include <unordered_map>
 
 namespace chatterino {
 
@@ -57,7 +59,8 @@ public:
         Misc,
     };
 
-    explicit Channel(const QString &name, Type type);
+    explicit Channel(const QString &name, Type type,
+                     std::optional<size_t> messageLimit = std::nullopt);
     ~Channel() override;
 
     // SIGNALS
@@ -71,6 +74,7 @@ public:
     pajlada::Signals::Signal<const std::vector<MessagePtr> &> filledInMessages;
     pajlada::Signals::NoArgSignal displayNameChanged;
     pajlada::Signals::NoArgSignal messagesCleared;
+    pajlada::Signals::Signal<size_t> messageLimitChanged;
 
     Type getType() const;
     const QString &getName() const;
@@ -125,6 +129,9 @@ public:
     bool hasMessages() const;
 
     size_t countMessages() const;
+    size_t messageLimit() const;
+    size_t messageIDIndexSize() const;
+    void setMessageLimit(size_t limit);
 
     void applySimilarityFilters(const MessagePtr &message) const final;
 
@@ -160,6 +167,9 @@ private:
 
     const QString name_;
     LimitedQueue<MessagePtr> messages_;
+    pajlada::Signals::SignalHolder historySettingsConnections_;
+    std::unordered_map<QString, std::weak_ptr<const Message>> messageIDIndex_;
+    bool messageIDIndexValid_ = false;
     Type type_;
     bool anythingLogged_ = false;
 

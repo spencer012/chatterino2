@@ -33,7 +33,8 @@ namespace chatterino {
 ChannelPtr SearchPopup::filter(const QString &text, const QString &channelName,
                                const std::vector<MessagePtr> &snapshot)
 {
-    ChannelPtr channel(new Channel(channelName, Channel::Type::None));
+    ChannelPtr channel(new Channel(channelName, Channel::Type::None,
+                                   std::max<size_t>(1, snapshot.size())));
 
     // Parse predicates from tags in "text"
     auto predicates = parsePredicates(text);
@@ -78,6 +79,9 @@ SearchPopup::SearchPopup(QWidget *parent, Split *split)
     , split_(split)
 {
     this->initLayout();
+    this->searchTimer_.setSingleShot(true);
+    this->searchTimer_.setInterval(150);
+    connect(&this->searchTimer_, &QTimer::timeout, this, &SearchPopup::search);
     if (this->split_ && this->split_->getChannelView().hasSelection())
     {
         this->searchInput_->setText(
@@ -229,9 +233,11 @@ void SearchPopup::themeChangedEvent()
 
 void SearchPopup::search()
 {
-    if (this->snapshot_.size() == 0)
+    this->searchTimer_.stop();
+    if (!this->snapshotBuilt_)
     {
         this->snapshot_ = this->buildSnapshot();
+        this->snapshotBuilt_ = true;
     }
 
     this->channelView_->setChannel(filter(this->searchInput_->text(),
@@ -304,7 +310,9 @@ void SearchPopup::initLayout()
                 this->searchInput_->findChild<QAbstractButton *>()->setIcon(
                     QPixmap(":/buttons/clearSearch.png"));
                 QObject::connect(this->searchInput_, &QLineEdit::textChanged,
-                                 this, &SearchPopup::search);
+                                 this, [this] {
+                                     this->searchTimer_.start();
+                                 });
                 this->searchInput_->installEventFilter(this);
             }
 

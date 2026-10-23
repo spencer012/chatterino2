@@ -63,6 +63,24 @@ TEST(Scrollbar, AddHighlight)
     }
 }
 
+TEST(Scrollbar, ResizeAfterWrapRetainsNewestMarkers)
+{
+    MockApplication mockApplication;
+    Scrollbar scrollbar(4, nullptr);
+    for (int i = 0; i < 8; ++i)
+    {
+        scrollbar.addHighlight({std::make_shared<QColor>(i, 0, 0)});
+    }
+    scrollbar.setMessageLimit(2);
+    const auto highlights = scrollbar.getHighlights();
+    ASSERT_EQ(highlights.size(), 2);
+    EXPECT_EQ(highlights.front().getColor().red(), 6);
+    EXPECT_EQ(highlights.back().getColor().red(), 7);
+    scrollbar.setMessageLimit(5);
+    scrollbar.addHighlight({});
+    EXPECT_EQ(scrollbar.getHighlights().size(), 3);
+}
+
 TEST(Scrollbar, AddHighlightsAtStart)
 {
     MockApplication mockApplication;
