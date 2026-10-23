@@ -31,6 +31,7 @@
 #include "widgets/buttons/SvgButton.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/helper/CommonTexts.hpp"
+#include "widgets/helper/ChannelView.hpp"
 #include "widgets/Label.hpp"
 #include "widgets/splits/PinnedMessageWidget.hpp"
 #include "widgets/splits/Split.hpp"
@@ -42,6 +43,7 @@
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMimeData>
 #include <QPainter>
 
@@ -499,10 +501,68 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
 
     if (twitchChannel)
     {
-        menu->addAction("Channel points",
-                        h->getDisplaySequence(HotkeyCategory::Split,
-                                              "showChannelPoints"),
-                        this->split_, &Split::openChannelPointsPopup);
+        auto *history = menu->addMenu("Channel history");
+        const auto channelName = twitchChannel->getName();
+        const auto override =
+            getSettings()->channelScrollbackOverride(channelName);
+        auto *useDefault = history->addAction(
+            QString("Use default (%1 messages)")
+                .arg(getSettings()->scrollbackSplitLimit.getValue()),
+            this, [channelName] {
+                getSettings()->setChannelScrollbackOverride(channelName, 0);
+            });
+        useDefault->setCheckable(true);
+        useDefault->setChecked(!override);
+        for (const auto limit : {1000, 10000, 100000, 250000, 500000, 1000000})
+        {
+            auto *action = history->addAction(
+                QString("%1 messages").arg(limit), this, [channelName, limit] {
+                    getSettings()->setChannelScrollbackOverride(channelName,
+                                                                limit);
+                });
+            action->setCheckable(true);
+            action->setChecked(override == limit);
+        }
+        history->addAction("Custom length...", this, [this, channelName] {
+            bool accepted = false;
+            const auto limit = QInputDialog::getInt(
+                this, "Channel history length",
+                QString("Messages retained for %1 in all splits.\n"
+                        "0 uses the default. Changes apply immediately.\n"
+                        "Shrinking discards old history. Growing collects more "
+                        "future messages.\n"
+                        "Large histories use more memory.")
+                    .arg(channelName),
+                getSettings()
+                    ->channelScrollbackOverride(channelName)
+                    .value_or(0),
+                0, 1000000, 100, &accepted);
+            if (accepted)
+            {
+                getSettings()->setChannelScrollbackOverride(channelName, limit);
+            }
+        });
+        history->addSeparator();
+        auto *logging =
+            history->addAction("Log cache performance every 30 seconds");
+        logging->setCheckable(true);
+        logging->setChecked(getSettings()->cachePerformanceLogging);
+        connect(logging, &QAction::toggled, this, [](bool enabled) {
+            getSettings()->cachePerformanceLogging = enabled;
+        });
+        history->addAction("Cache diagnostics...", this, [this] {
+            QMessageBox dialog(
+                QMessageBox::Information, "Message cache diagnostics",
+                this->split_->getChannelView().cacheDiagnostics(),
+                QMessageBox::Ok, this);
+            dialog.setTextInteractionFlags(Qt::TextSelectableByMouse |
+                                           Qt::TextSelectableByKeyboard);
+            dialog.exec();
+        });
+        menu->addAction(
+            "Channel points",
+            h->getDisplaySequence(HotkeyCategory::Split, "showChannelPoints"),
+            this->split_, &Split::openChannelPointsPopup);
         menu->addAction(
             OPEN_IN_BROWSER,
             h->getDisplaySequence(HotkeyCategory::Split, "openInBrowser"),
@@ -659,8 +719,7 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
 
     auto *hideInputAction = moreMenu->addAction(
         "Hide input box",
-        h->getDisplaySequence(HotkeyCategory::Split,
-                              "toggleInputVisibility"),
+        h->getDisplaySequence(HotkeyCategory::Split, "toggleInputVisibility"),
         this->split_, [this]() {
             this->split_->setInputHidden(!this->split_->getInputHidden());
         });

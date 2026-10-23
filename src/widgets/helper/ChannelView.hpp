@@ -5,9 +5,10 @@
 #pragma once
 
 #include "common/FlagsEnum.hpp"
+#include "debug/MessageCacheStats.hpp"
 #include "messages/layouts/MessageLayoutContext.hpp"
-#include "messages/LimitedQueue.hpp"
 #include "messages/MessageFlag.hpp"
+#include "messages/MessageViewQueue.hpp"
 #include "messages/Selection.hpp"
 #include "util/ThreadGuard.hpp"
 #include "widgets/BaseWidget.hpp"
@@ -24,9 +25,10 @@
 #include <QWheelEvent>
 #include <QWidget>
 
+#include <deque>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -41,6 +43,7 @@ using MessagePtr = std::shared_ptr<const Message>;
 
 class MessageLayout;
 using MessageLayoutPtr = std::shared_ptr<MessageLayout>;
+using MessageLayoutSnapshot = MessageViewQueue<MessageLayoutPtr>::Snapshot;
 
 enum class MessageElementFlag : int64_t;
 using MessageElementFlags = FlagsEnum<MessageElementFlag>;
@@ -105,6 +108,8 @@ public:
                          size_t messagesLimit = 1000);
 
     void queueUpdate();
+    QString cacheDiagnostics() const;
+    void setMessageLimit(size_t limit);
     void queueUpdate(const QRect &area);
     Scrollbar &getScrollBar();
 
@@ -195,7 +200,7 @@ public:
     /// #underlyingChannel().
     ChannelPtr effectiveSourceChannel() const;
 
-    std::vector<MessageLayoutPtr> &getMessagesSnapshot();
+    const MessageLayoutSnapshot &getMessagesSnapshot();
 
     void queueLayout(bool disableAnimation = false);
     void invalidateBuffers();
@@ -307,8 +312,8 @@ private:
     void performLayout(bool causedByScrollbar = false,
                        bool disableAnimation = false);
     void updateGoToBottomVisibility();
-    void layoutVisibleMessages(const std::vector<MessageLayoutPtr> &messages);
-    void updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
+    void layoutVisibleMessages(const MessageLayoutSnapshot &messages);
+    void updateScrollbar(const MessageLayoutSnapshot &messages,
                          bool causedByScrollbar, bool disableAnimation);
 
     void drawMessages(QPainter &painter, const QRect &area);
@@ -352,6 +357,10 @@ private:
     ChannelViewID id_{};
 
     bool layoutQueued_ = false;
+    bool layoutTimerPending_ = false;
+    bool disableLayoutAnimation_ = false;
+    size_t layoutFirstVisible_ = 0;
+    size_t layoutLastVisible_ = 0;
     bool bufferInvalidationQueued_ = false;
 
     bool lastMessageHasAlternateBackground_ = false;
@@ -375,7 +384,8 @@ private:
     MessageLayoutPtr lastReadMessage_;
 
     ThreadGuard snapshotGuard_;
-    std::vector<MessageLayoutPtr> snapshot_;
+    MessageLayoutSnapshot snapshot_;
+    MessageCacheStats cacheStats_;
 
     /// @brief The backing (internal) channel
     ///
@@ -459,12 +469,13 @@ private:
 
     const Context context_;
 
-    LimitedQueue<MessageLayoutPtr> messages_;
-    std::vector<std::pair<qint64, size_t>> replayTimeIndex_;
+    MessageViewQueue<MessageLayoutPtr> messages_;
+    std::deque<std::pair<qint64, size_t>> replayTimeIndex_;
     std::optional<size_t> replayCursorIndex_;
-    MessageLayout *replayFirst_ = nullptr;
-    MessageLayout *replayLast_ = nullptr;
-    size_t replaySnapshotSize_ = 0;
+    size_t replayBaseSequence_ = 0;
+    bool replayIndexValid_ = false;
+    bool replayIndexSorted_ = true;
+    void invalidateReplayIndex();
 
     pajlada::Signals::SignalHolder signalHolder_;
 

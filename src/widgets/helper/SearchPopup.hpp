@@ -7,6 +7,8 @@
 #include "ForwardDecl.hpp"
 #include "widgets/BasePopup.hpp"
 
+#include <QTimer>
+
 #include <memory>
 
 class QLineEdit;
@@ -69,6 +71,8 @@ private:
         const QString &input);
 
     std::vector<MessagePtr> snapshot_;
+    QTimer searchTimer_;
+    bool snapshotBuilt_ = false;
     QLineEdit *searchInput_{};
     ChannelView *channelView_{};
     QString channelName_{};

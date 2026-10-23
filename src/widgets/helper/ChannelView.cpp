@@ -73,6 +73,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <memory>
 
 namespace {
@@ -318,6 +319,16 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
 {
     this->setMouseTracking(true);
 
+    auto *metricsTimer = new QTimer(this);
+    metricsTimer->setInterval(30000);
+    connect(metricsTimer, &QTimer::timeout, this, [this] {
+        if (getSettings()->cachePerformanceLogging && this->underlyingChannel_)
+        {
+            qCInfo(messageCacheLog).noquote() << this->cacheDiagnostics();
+        }
+    });
+    metricsTimer->start();
+
     this->initializeLayout();
     this->initializeScrollbar();
     this->initializeSignals();
@@ -521,6 +532,22 @@ bool ChannelView::paused() const
 void ChannelView::pause(PauseReason reason, std::optional<uint> msecs)
 {
     bool wasUnpaused = !this->paused();
+    if (wasUnpaused && this->pausable_)
+    {
+        const bool timed = getSettings()->cachePerformanceLogging;
+        const auto start = timed ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
+        this->snapshot_ = this->messages_.live();
+        ++this->cacheStats_.snapshotBuilds;
+        this->cacheStats_.copiedReferences += this->snapshot_.size();
+        if (timed)
+        {
+            this->cacheStats_.snapshotNanoseconds +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - start)
+                    .count();
+        }
+    }
 
     if (msecs)
     {
@@ -620,6 +647,7 @@ void ChannelView::updatePauses()
 
 void ChannelView::unpaused()
 {
+    this->snapshot_ = MessageLayoutSnapshot{};
     this->replayManualReading_ = false;
     this->updateGoToBottomVisibility();
 
@@ -690,13 +718,19 @@ void ChannelView::invalidateBuffers()
 
 void ChannelView::queueLayout(bool disableAnimation)
 {
-    if (this->isVisible())
+    this->layoutQueued_ = true;
+    this->disableLayoutAnimation_ |= disableAnimation;
+    if (this->isVisible() && !this->layoutTimerPending_)
     {
-        this->performLayout(/*causedByScrollbar=*/false, disableAnimation);
-    }
-    else
-    {
-        this->layoutQueued_ = true;
+        this->layoutTimerPending_ = true;
+        QTimer::singleShot(0, this, [this] {
+            this->layoutTimerPending_ = false;
+            if (this->layoutQueued_ && this->isVisible())
+            {
+                this->performLayout(false, this->disableLayoutAnimation_);
+                this->update();
+            }
+        });
     }
 }
 
@@ -714,6 +748,8 @@ void ChannelView::performLayout(bool causedByScrollbar, bool disableAnimation)
     // BenchmarkGuard benchmark("layout");
 
     this->layoutQueued_ = false;
+    disableAnimation |= this->disableLayoutAnimation_;
+    this->disableLayoutAnimation_ = false;
 
     /// Get messages and check if there are at least 1
     const auto &messages = this->getMessagesSnapshot();
@@ -736,13 +772,15 @@ void ChannelView::updateGoToBottomVisibility()
     this->goToBottom_->setVisible(
         this->enableScrollingToBottom_ && this->scrollBar_->isVisible() &&
         !this->scrollBar_->isAtBottom() &&
-        (!this->replayChatMode_ || (this->paused() && this->replayManualReading_)));
+        (!this->replayChatMode_ ||
+         (this->paused() && this->replayManualReading_)));
 }
 
-void ChannelView::layoutVisibleMessages(
-    const std::vector<MessageLayoutPtr> &messages)
+void ChannelView::layoutVisibleMessages(const MessageLayoutSnapshot &messages)
 {
     const auto start = size_t(this->scrollBar_->getRelativeCurrentValue());
+    this->layoutFirstVisible_ = start;
+    this->layoutLastVisible_ = start;
     const auto layoutWidth = this->getLayoutWidth();
     const auto flags = this->getFlags();
     auto redrawRequired = false;
@@ -768,6 +806,7 @@ void ChannelView::layoutVisibleMessages(
                 this->bufferInvalidationQueued_);
 
             y += message->getHeight();
+            this->layoutLastVisible_ = i + 1;
         }
         this->bufferInvalidationQueued_ = false;
     }
@@ -778,7 +817,7 @@ void ChannelView::layoutVisibleMessages(
     }
 }
 
-void ChannelView::updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
+void ChannelView::updateScrollbar(const MessageLayoutSnapshot &messages,
                                   bool causedByScrollbar, bool disableAnimation)
 {
     if (messages.size() == 0)
@@ -809,13 +848,20 @@ void ChannelView::updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
             },
             false);
 
-        h -= message->getHeight();
+        const auto messageHeight = message->getHeight();
+        h -= messageHeight;
+        if ((static_cast<size_t>(i) < this->layoutFirstVisible_ ||
+             static_cast<size_t>(i) >= this->layoutLastVisible_) &&
+            !this->messagesOnScreen_.contains(messages[i]))
+        {
+            message->deleteCache();
+        }
 
         if (h < 0)  // break condition
         {
             this->scrollBar_->setPageSize(
                 static_cast<qreal>(messages.size() - i) +
-                (h / std::max(1, message->getHeight())));
+                (h / std::max(1, messageHeight)));
 
             showScrollbar = true;
             break;
@@ -844,11 +890,20 @@ void ChannelView::updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
 
 void ChannelView::clearMessages()
 {
-    this->replayTimeIndex_.clear();
-    this->resetReplayScroll();
-    this->replayFirst_ = nullptr;
-    this->replayLast_ = nullptr;
-    this->replaySnapshotSize_ = 0;
+    for (const auto &layout : this->messagesOnScreen_)
+    {
+        layout->deleteCache();
+    }
+    this->messagesOnScreen_.clear();
+    this->snapshot_ = MessageLayoutSnapshot{};
+    this->selection_ = {};
+    this->doubleClickSelection_ = {};
+    this->highlightedMessage_ = nullptr;
+    this->lastReadMessage_.reset();
+    this->pauseScrollMinimumOffset_ = 0;
+    this->pauseScrollMaximumOffset_ = 0;
+    this->pauseSelectionOffset_ = 0;
+    this->invalidateReplayIndex();
     // Clear all stored messages in this chat widget
     this->messages_.clear();
     this->scrollBar_->clearHighlights();
@@ -871,8 +926,7 @@ QString ChannelView::getSelectedText()
 {
     QString result = "";
 
-    std::vector<MessageLayoutPtr> &messagesSnapshot =
-        this->getMessagesSnapshot();
+    const auto &messagesSnapshot = this->getMessagesSnapshot();
 
     Selection selection = this->selection_;
 
@@ -894,6 +948,14 @@ QString ChannelView::getSelectedText()
     for (auto msg = indexStart; msg <= indexEnd; msg++)
     {
         MessageLayoutPtr layout = messagesSnapshot[msg];
+        layout->layout(
+            {.messageColors = this->messageColors_,
+             .flags = this->getFlags(),
+             .width = this->getLayoutWidth(),
+             .scale = this->scale(),
+             .imageScale =
+                 this->scale() * static_cast<float>(this->devicePixelRatio())},
+            false);
         auto from = msg == selection.selectionMin.messageIndex
                         ? selection.selectionMin.charIndex
                         : 0;
@@ -902,6 +964,10 @@ QString ChannelView::getSelectedText()
                       : layout->getLastCharacterIndex() + 1;
 
         layout->addSelectionText(result, from, to);
+        if (!this->messagesOnScreen_.contains(layout))
+        {
+            layout->deleteCache();
+        }
 
         if (msg != indexEnd)
         {
@@ -948,15 +1014,50 @@ const std::optional<MessageElementFlags> &ChannelView::getOverrideFlags() const
     return this->overrideFlags_;
 }
 
-std::vector<MessageLayoutPtr> &ChannelView::getMessagesSnapshot()
+const MessageLayoutSnapshot &ChannelView::getMessagesSnapshot()
 {
     this->snapshotGuard_.guard();
-    if (!this->paused() /*|| this->scrollBar_->isVisible()*/)
-    {
-        this->snapshot_ = this->messages_.getSnapshot();
-    }
+    ++this->cacheStats_.snapshotReuses;
+    return this->paused() ? this->snapshot_ : this->messages_.live();
+}
 
-    return this->snapshot_;
+QString ChannelView::cacheDiagnostics() const
+{
+    auto description = QString("Channel: %1\nRetained view messages: %2 / %3\n%4")
+        .arg(this->underlyingChannel_ ? this->underlyingChannel_->getName()
+                                      : QString{})
+        .arg(this->messages_.size())
+        .arg(this->messages_.limit())
+        .arg(this->cacheStats_.describe());
+    if (this->underlyingChannel_)
+    {
+        description += QString("\nBacking channel messages: %1 / %2\n"
+                               "Message ID index entries: %3")
+            .arg(this->underlyingChannel_->countMessages())
+            .arg(this->underlyingChannel_->messageLimit())
+            .arg(this->underlyingChannel_->messageIDIndexSize());
+    }
+    return description;
+}
+
+void ChannelView::setMessageLimit(size_t limit)
+{
+    this->channel_->setMessageLimit(limit);
+    const auto removed = this->messages_.setLimit(limit).size();
+    this->scrollBar_->setMessageLimit(limit);
+    this->invalidateReplayIndex();
+    if (this->paused())
+    {
+        this->pauseScrollMinimumOffset_ += static_cast<int>(removed);
+        this->pauseSelectionOffset_ += static_cast<uint32_t>(removed);
+    }
+    else
+    {
+        this->scrollBar_->offsetMinimum(static_cast<qreal>(removed));
+        this->selection_.shiftMessageIndex(removed);
+        this->doubleClickSelection_.shiftMessageIndex(removed);
+    }
+    this->queueLayout(true);
 }
 
 ChannelPtr ChannelView::channel() const
@@ -984,9 +1085,25 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
     this->clearMessages();
     this->scrollBar_->clearHighlights();
 
+    if (this->context_ == Context::None || this->context_ == Context::Search)
+    {
+        this->messages_.setLimit(underlyingChannel->messageLimit());
+        this->scrollBar_->setMessageLimit(underlyingChannel->messageLimit());
+    }
+
     /// make copy of channel and expose
     this->channel_ = std::make_unique<Channel>(underlyingChannel->getName(),
-                                               underlyingChannel->getType());
+                                               underlyingChannel->getType(),
+                                               this->messages_.limit());
+
+    this->channelConnections_.managedConnect(
+        underlyingChannel->messageLimitChanged, [this](size_t limit) {
+            if (this->context_ == Context::None ||
+                this->context_ == Context::Search)
+            {
+                this->setMessageLimit(limit);
+            }
+        });
 
     //
     // Proxy channel connections
@@ -1051,10 +1168,11 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
             this->channel_->fillInMissingMessages(filtered);
         });
 
-    this->channelConnections_.managedConnect(underlyingChannel->messagesCleared,
-                                             [this]() {
-                                                 this->clearMessages();
-                                             });
+    this->channelConnections_.managedConnect(
+        underlyingChannel->messagesCleared, [this]() {
+            this->channel_->clearMessages();
+            this->clearMessages();
+        });
 
     // Copy over messages from the backing channel to the filtered one
     // and the ui.
@@ -1156,11 +1274,7 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
 
 void ChannelView::setFilters(const QList<QUuid> &ids)
 {
-    this->replayTimeIndex_.clear();
-    this->resetReplayScroll();
-    this->replayFirst_ = nullptr;
-    this->replayLast_ = nullptr;
-    this->replaySnapshotSize_ = 0;
+    this->invalidateReplayIndex();
     this->channelFilters_ = std::make_shared<FilterSet>(ids);
 
     this->updateID();
@@ -1255,6 +1369,16 @@ void ChannelView::messageAppended(MessagePtr &message,
 
     if (this->messages_.pushBack(messageRef))
     {
+        if (this->replayIndexValid_)
+        {
+            ++this->replayBaseSequence_;
+            while (!this->replayTimeIndex_.empty() &&
+                   this->replayTimeIndex_.front().second <
+                       this->replayBaseSequence_)
+            {
+                this->replayTimeIndex_.pop_front();
+            }
+        }
         if (this->paused())
         {
             this->pauseScrollMinimumOffset_++;
@@ -1270,6 +1394,19 @@ void ChannelView::messageAppended(MessagePtr &message,
             this->selection_.shiftMessageIndex(1);
             this->doubleClickSelection_.shiftMessageIndex(1);
         }
+    }
+
+    if (this->replayIndexValid_ && message->serverReceivedTime.isValid())
+    {
+        const auto stamp = message->serverReceivedTime.toMSecsSinceEpoch();
+        if (!this->replayTimeIndex_.empty() &&
+            stamp < this->replayTimeIndex_.back().first)
+        {
+            this->replayIndexSorted_ = false;
+        }
+        this->replayTimeIndex_.emplace_back(
+            stamp, this->replayBaseSequence_ + this->messages_.size() - 1);
+        ++this->cacheStats_.replayAppends;
     }
 
     if (!messageFlags->has(MessageFlag::DoNotTriggerNotification))
@@ -1298,6 +1435,7 @@ void ChannelView::messageAppended(MessagePtr &message,
 
 void ChannelView::messageAddedAtStart(std::vector<MessagePtr> &messages)
 {
+    this->invalidateReplayIndex();
     std::vector<MessageLayoutPtr> messageRefs;
     messageRefs.resize(messages.size());
 
@@ -1351,6 +1489,7 @@ void ChannelView::messageAddedAtStart(std::vector<MessagePtr> &messages)
 void ChannelView::messageReplaced(size_t hint, const MessagePtr &prev,
                                   const MessagePtr &replacement)
 {
+    this->invalidateReplayIndex();
     auto optItem = this->messages_.find(hint, [&](const auto &it) {
         return it->getMessagePtr() == prev;
     });
@@ -1376,6 +1515,7 @@ void ChannelView::messageReplaced(size_t hint, const MessagePtr &prev,
 
 void ChannelView::messagesUpdated()
 {
+    this->invalidateReplayIndex();
     auto snapshot = this->channel_->getMessageSnapshot();
 
     this->messages_.clear();
@@ -1600,6 +1740,15 @@ void ChannelView::scrollToMessageLayout(MessageLayout *layout,
     }
 }
 
+void ChannelView::invalidateReplayIndex()
+{
+    this->replayTimeIndex_.clear();
+    this->replayIndexValid_ = false;
+    this->replayIndexSorted_ = true;
+    this->replayBaseSequence_ = 0;
+    this->resetReplayScroll();
+}
+
 void ChannelView::resetReplayScroll()
 {
     this->replayCursorIndex_.reset();
@@ -1612,8 +1761,7 @@ void ChannelView::setReplayChatMode(bool enabled)
     this->updateGoToBottomVisibility();
 }
 
-bool ChannelView::scrollToServerTime(qint64 wallMs,
-                                     size_t maxMessagesPerStep)
+bool ChannelView::scrollToServerTime(qint64 wallMs, size_t maxMessagesPerStep)
 {
     if (this->paused())
     {
@@ -1624,62 +1772,84 @@ bool ChannelView::scrollToServerTime(qint64 wallMs,
     {
         return true;
     }
-    const bool unchanged = this->replayFirst_ == snapshot.front().get() &&
-                           this->replayLast_ == snapshot.back().get() &&
-                           this->replaySnapshotSize_ == snapshot.size();
-    if (!unchanged)
+    if (!this->replayIndexValid_)
     {
-        const bool appended = this->replaySnapshotSize_ > 0 &&
-                              this->replayFirst_ == snapshot.front().get() &&
-                              this->replaySnapshotSize_ < snapshot.size() &&
-                              snapshot[this->replaySnapshotSize_ - 1].get() ==
-                                  this->replayLast_;
-        if (!appended)
-        {
-            this->replayTimeIndex_.clear();
-            this->resetReplayScroll();
-        }
-        for (size_t i = appended ? this->replaySnapshotSize_ : 0;
-             i < snapshot.size(); ++i)
+        this->replayTimeIndex_.clear();
+        this->replayBaseSequence_ = 0;
+        this->replayIndexSorted_ = true;
+        for (size_t i = 0; i < snapshot.size(); ++i)
         {
             const auto &time = snapshot[i]->getMessagePtr()->serverReceivedTime;
             if (time.isValid())
             {
-                this->replayTimeIndex_.emplace_back(time.toMSecsSinceEpoch(), i);
+                const auto stamp = time.toMSecsSinceEpoch();
+                if (!this->replayTimeIndex_.empty() &&
+                    stamp < this->replayTimeIndex_.back().first)
+                {
+                    this->replayIndexSorted_ = false;
+                }
+                this->replayTimeIndex_.emplace_back(stamp, i);
             }
         }
-        this->replayFirst_ = snapshot.front().get();
-        this->replayLast_ = snapshot.back().get();
-        this->replaySnapshotSize_ = snapshot.size();
+        this->replayIndexValid_ = true;
+        ++this->cacheStats_.replayRebuilds;
     }
     if (this->replayTimeIndex_.empty())
     {
         return true;
     }
-    const auto it = std::upper_bound(
-        this->replayTimeIndex_.begin(), this->replayTimeIndex_.end(), wallMs,
-        [](qint64 time, const auto &entry) { return time < entry.first; });
-    const bool atEnd = it == this->replayTimeIndex_.end();
-    const size_t target = atEnd
-                              ? this->replayTimeIndex_.back().second
-                              : it == this->replayTimeIndex_.begin()
-                                    ? 0
-                                    : std::prev(it)->second;
+    auto selected = this->replayTimeIndex_.end();
+    bool atEnd = false;
+    if (this->replayIndexSorted_)
+    {
+        const auto it = std::upper_bound(this->replayTimeIndex_.begin(),
+                                         this->replayTimeIndex_.end(), wallMs,
+                                         [](qint64 time, const auto &entry) {
+                                             return time < entry.first;
+                                         });
+        atEnd = it == this->replayTimeIndex_.end();
+        if (it != this->replayTimeIndex_.begin())
+        {
+            selected = std::prev(it);
+        }
+    }
+    else
+    {
+        // Backfilled/out-of-order timestamps cannot use binary search.
+        qint64 latest = std::numeric_limits<qint64>::min();
+        for (auto it = this->replayTimeIndex_.begin();
+             it != this->replayTimeIndex_.end(); ++it)
+        {
+            latest = std::max(latest, it->first);
+            if (it->first <= wallMs &&
+                (selected == this->replayTimeIndex_.end() ||
+                 it->first >= selected->first))
+            {
+                selected = it;
+            }
+        }
+        atEnd = wallMs >= latest;
+    }
+    const size_t target = selected == this->replayTimeIndex_.end()
+                              ? 0
+                              : selected->second - this->replayBaseSequence_;
     size_t displayed = target;
     if (maxMessagesPerStep > 0 && this->replayCursorIndex_)
     {
-        const size_t previous = *this->replayCursorIndex_;
+        const size_t previous =
+            std::clamp(*this->replayCursorIndex_, this->replayBaseSequence_,
+                       this->replayBaseSequence_ + snapshot.size() - 1) -
+            this->replayBaseSequence_;
         if (target > previous && target - previous > maxMessagesPerStep)
         {
             displayed = previous + maxMessagesPerStep;
         }
-        else if (previous > target &&
-                 previous - target > maxMessagesPerStep)
+        else if (previous > target && previous - target > maxMessagesPerStep)
         {
             displayed = previous - maxMessagesPerStep;
         }
     }
-    this->replayCursorIndex_ = displayed;
+    this->replayCursorIndex_ = this->replayBaseSequence_ + displayed;
     const bool caughtUp = displayed == target;
     if (atEnd && caughtUp)
     {
@@ -1697,8 +1867,8 @@ bool ChannelView::scrollToServerTime(qint64 wallMs,
              .flags = this->getFlags(),
              .width = this->getLayoutWidth(),
              .scale = this->scale(),
-             .imageScale = this->scale() *
-                           static_cast<float>(this->devicePixelRatio())},
+             .imageScale =
+                 this->scale() * static_cast<float>(this->devicePixelRatio())},
             false);
         const qreal messageHeight = std::max<qreal>(1, message->getHeight());
         if (remaining < messageHeight)
@@ -1719,6 +1889,10 @@ bool ChannelView::scrollToServerTime(qint64 wallMs,
 
 void ChannelView::paintEvent(QPaintEvent *event)
 {
+    if (this->layoutQueued_)
+    {
+        this->performLayout(false, this->disableLayoutAnimation_);
+    }
     //    BenchmarkGuard benchmark("paint");
 
     QPainter painter(this);
@@ -1779,6 +1953,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     }
 
     MessageLayout *end = nullptr;
+    size_t visibleEnd = start;
 
     MessagePaintContext ctx = {
         .painter = painter,
@@ -1865,6 +2040,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         ctx.y += layout->getHeight();
 
         end = layout;
+        visibleEnd = ctx.messageIndex + 1;
         if (ctx.y > this->height())
         {
             break;
@@ -1895,7 +2071,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
 
     // remove messages that are on screen
     // the messages that are left at the end get their buffers reset
-    for (size_t i = start; i < messagesSnapshot.size(); ++i)
+    for (size_t i = start; i < visibleEnd; ++i)
     {
         auto it = this->messagesOnScreen_.find(messagesSnapshot[i]);
         if (it != this->messagesOnScreen_.end())
@@ -1907,7 +2083,8 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     // delete the message buffers that aren't on screen
     for (const std::shared_ptr<MessageLayout> &item : this->messagesOnScreen_)
     {
-        item->deleteBuffer();
+        item->deleteCache();
+        ++this->cacheStats_.layoutsReleased;
     }
 
     this->messagesOnScreen_.clear();
@@ -1951,6 +2128,10 @@ void ChannelView::wheelEvent(QWheelEvent *event)
 
         auto &snapshot = this->getMessagesSnapshot();
         int snapshotLength = int(snapshot.size());
+        if (snapshotLength == 0)
+        {
+            return;
+        }
         int i = std::min<int>(int(desired - this->scrollBar_->getMinimum()),
                               snapshotLength - 1);
 
@@ -1992,6 +2173,10 @@ void ChannelView::wheelEvent(QWheelEvent *event)
                         false);
                     scrollFactor = 1;
                     currentScrollLeft = snapshot[i - 1]->getHeight();
+                    if (!this->messagesOnScreen_.contains(snapshot[i - 1]))
+                    {
+                        snapshot[i - 1]->deleteCache();
+                    }
                 }
             }
         }
@@ -2036,6 +2221,10 @@ void ChannelView::wheelEvent(QWheelEvent *event)
 
                     scrollFactor = 1;
                     currentScrollLeft = snapshot[i + 1]->getHeight();
+                    if (!this->messagesOnScreen_.contains(snapshot[i + 1]))
+                    {
+                        snapshot[i + 1]->deleteCache();
+                    }
                 }
             }
         }
@@ -3221,7 +3410,7 @@ void ChannelView::hideEvent(QHideEvent * /*event*/)
 {
     for (const auto &layout : this->messagesOnScreen_)
     {
-        layout->deleteBuffer();
+        layout->deleteCache();
     }
 
     this->messagesOnScreen_.clear();

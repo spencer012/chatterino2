@@ -35,7 +35,7 @@ namespace chatterino {
 Scrollbar::Scrollbar(size_t messagesLimit, ChannelView *parent)
     : BaseWidget(parent)
     , currentValueAnimation_(this, "currentValue_")
-    , highlights_(messagesLimit)
+    , highlights_(std::max<size_t>(1, messagesLimit))
 {
     this->resize(static_cast<int>(16 * this->scale()), 100);
     this->currentValueAnimation_.setDuration(150);
@@ -68,7 +68,20 @@ boost::circular_buffer<ScrollbarHighlight> Scrollbar::getHighlights() const
 
 void Scrollbar::addHighlight(ScrollbarHighlight highlight)
 {
+    if (this->highlights_.full())
+    {
+        this->highlightMarkers_.erase(this->highlightOffset_++);
+    }
+    if (!highlight.isNull())
+    {
+        this->highlightMarkers_.emplace(
+            this->highlightOffset_ + static_cast<int64_t>(std::min(
+                                         this->highlights_.size(),
+                                         this->highlights_.capacity() - 1)),
+            highlight);
+    }
     this->highlights_.push_back(std::move(highlight));
+    this->highlightLayerDirty_ = true;
 }
 
 void Scrollbar::addHighlightsAtStart(
@@ -86,6 +99,7 @@ void Scrollbar::addHighlightsAtStart(
     {
         this->highlights_.push_front(highlights[highlights.size() - 1 - i]);
     }
+    this->rebuildHighlightMarkers();
 }
 
 void Scrollbar::replaceHighlight(size_t index, ScrollbarHighlight replacement)
@@ -96,11 +110,56 @@ void Scrollbar::replaceHighlight(size_t index, ScrollbarHighlight replacement)
     }
 
     this->highlights_[index] = std::move(replacement);
+    const auto key = this->highlightOffset_ + static_cast<int64_t>(index);
+    if (this->highlights_[index].isNull())
+    {
+        this->highlightMarkers_.erase(key);
+    }
+    else
+    {
+        this->highlightMarkers_.insert_or_assign(key, this->highlights_[index]);
+    }
+    this->highlightLayerDirty_ = true;
 }
 
 void Scrollbar::clearHighlights()
 {
     this->highlights_.clear();
+    this->highlightMarkers_.clear();
+    this->highlightOffset_ = 0;
+    this->highlightLayerDirty_ = true;
+}
+
+void Scrollbar::rebuildHighlightMarkers()
+{
+    this->highlightMarkers_.clear();
+    this->highlightOffset_ = 0;
+    for (size_t i = 0; i < this->highlights_.size(); ++i)
+    {
+        if (!this->highlights_[i].isNull())
+        {
+            this->highlightMarkers_.emplace(static_cast<int64_t>(i),
+                                            this->highlights_[i]);
+        }
+    }
+    this->highlightLayerDirty_ = true;
+}
+
+void Scrollbar::setMessageLimit(size_t limit)
+{
+    limit = std::max<size_t>(1, limit);
+    while (this->highlights_.size() > limit)
+    {
+        this->highlights_.pop_front();
+    }
+    this->highlights_.set_capacity(limit);
+    this->rebuildHighlightMarkers();
+}
+
+void Scrollbar::themeChangedEvent()
+{
+    BaseWidget::themeChangedEvent();
+    this->highlightLayerDirty_ = true;
 }
 
 void Scrollbar::scrollToBottom(bool animate)
@@ -314,45 +373,55 @@ void Scrollbar::paintEvent(QPaintEvent * /*event*/)
         }
     }
 
-    if (this->shouldShowHighlights() && !this->highlights_.empty())
+    if (this->shouldShowHighlights())
     {
-        size_t nHighlights = this->highlights_.size();
-        int w = this->width();
-        float dY = static_cast<float>(this->height()) /
-                   static_cast<float>(nHighlights);
-        int highlightHeight =
+        this->paintHighlights(painter);
+    }
+}
+
+void Scrollbar::paintHighlights(QPainter &painter)
+{
+    if (this->highlightMarkers_.empty())
+    {
+        return;
+    }
+    const auto ratio = this->devicePixelRatioF();
+    const QSize pixels(qRound(this->width() * ratio),
+                       qRound(this->height() * ratio));
+    if (this->highlightLayerDirty_ || this->highlightLayer_.size() != pixels ||
+        this->highlightLayer_.devicePixelRatioF() != ratio)
+    {
+        this->highlightLayer_ = QPixmap(pixels);
+        this->highlightLayer_.setDevicePixelRatio(ratio);
+        this->highlightLayer_.fill(Qt::transparent);
+        QPainter layerPainter(&this->highlightLayer_);
+        const auto dY = static_cast<float>(this->height()) /
+                        static_cast<float>(this->highlights_.size());
+        const auto highlightHeight =
             static_cast<int>(std::ceil(std::max(this->scale() * 2.0F, dY)));
-
-        for (size_t i = 0; i < nHighlights; i++)
+        const auto w = this->width();
+        for (const auto &[sequence, highlight] : this->highlightMarkers_)
         {
-            const auto &highlight = this->highlights_[i];
-
-            if (highlight.isNull())
-            {
-                continue;
-            }
-
-            QColor color = highlight.getColor();
+            auto color = highlight.getColor();
             color.setAlpha(255);
-
-            int y = static_cast<int>(dY * static_cast<float>(i));
+            const auto y = static_cast<int>(
+                dY * static_cast<float>(sequence - this->highlightOffset_));
             switch (highlight.getStyle())
             {
-                case ScrollbarHighlight::Style::Default: {
-                    painter.fillRect(w / 8 * 3, y, w / 4, highlightHeight,
-                                     color);
-                }
-                break;
-
-                case ScrollbarHighlight::Style::Line: {
-                    painter.fillRect(0, y, w, 1, color);
-                }
-                break;
-
-                case ScrollbarHighlight::Style::None:;
+                case ScrollbarHighlight::Style::Default:
+                    layerPainter.fillRect(w / 8 * 3, y, w / 4, highlightHeight,
+                                          color);
+                    break;
+                case ScrollbarHighlight::Style::Line:
+                    layerPainter.fillRect(0, y, w, 1, color);
+                    break;
+                case ScrollbarHighlight::Style::None:
+                    break;
             }
         }
+        this->highlightLayerDirty_ = false;
     }
+    painter.drawPixmap(0, 0, this->highlightLayer_);
 }
 
 void Scrollbar::resizeEvent(QResizeEvent * /*event*/)

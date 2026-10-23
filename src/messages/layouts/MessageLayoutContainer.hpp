@@ -35,6 +35,8 @@ struct MessagePaintContext;
 
 struct MessageLayoutContainer {
     MessageLayoutContainer() = default;
+    /// Release detailed geometry while preserving the last measured height.
+    void clearLayout();
 
     /**
      * Begin the layout process of this message

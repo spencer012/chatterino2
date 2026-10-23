@@ -24,6 +24,10 @@
 #include "util/WindowsHelper.hpp"
 
 #include <pajlada/signals/scoped-connection.hpp>
+#include <QJsonDocument>
+#include <QJsonObject>
+
+#include <algorithm>
 
 namespace {
 
@@ -973,6 +977,44 @@ bool Settings::recreateMissingHighlights()
     }
 
     return dirty;
+}
+
+std::optional<int> Settings::channelScrollbackOverride(
+    const QString &channel) const
+{
+    const auto overrides =
+        QJsonDocument::fromJson(
+            this->channelScrollbackOverrides.getValue().toUtf8())
+            .object();
+    const auto value = overrides.value(channel.toLower());
+    if (!value.isDouble() || value.toInt() <= 0)
+    {
+        return std::nullopt;
+    }
+    return std::clamp(value.toInt(), 100, 1000000);
+}
+
+int Settings::channelScrollbackLimit(const QString &channel) const
+{
+    return this->channelScrollbackOverride(channel).value_or(
+        std::clamp(this->scrollbackSplitLimit.getValue(), 100, 1000000));
+}
+
+void Settings::setChannelScrollbackOverride(const QString &channel, int limit)
+{
+    auto overrides = QJsonDocument::fromJson(
+                         this->channelScrollbackOverrides.getValue().toUtf8())
+                         .object();
+    if (limit <= 0)
+    {
+        overrides.remove(channel.toLower());
+    }
+    else
+    {
+        overrides.insert(channel.toLower(), std::clamp(limit, 100, 1000000));
+    }
+    this->channelScrollbackOverrides = QString::fromUtf8(
+        QJsonDocument(overrides).toJson(QJsonDocument::Compact));
 }
 
 bool Settings::isBlacklistedUser(const QString &username)

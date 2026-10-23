@@ -1263,16 +1263,15 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         "Minimum share of weighted score needed for a candidate to be picked.");
 
     layout.addDropdown<float>(
-        "Crowd Copy decay half-life (seconds)", {"2", "4", "6", "8", "12", "16"},
-        s.crowdCopyDecayHalfLifeSec,
+        "Crowd Copy decay half-life (seconds)",
+        {"2", "4", "6", "8", "12", "16"}, s.crowdCopyDecayHalfLifeSec,
         [](auto val) {
             return QString::number(val, 'f', 1);
         },
         [](auto args) {
             return fuzzyToFloat(args.value, 8.0F);
         },
-        true,
-        "How quickly old messages lose influence.");
+        true, "How quickly old messages lose influence.");
 
     SettingWidget::intInput("Crowd Copy update interval (ms)",
                             s.crowdCopyUpdateIntervalMs,
@@ -1733,13 +1732,17 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                             })
         ->addTo(layout);
 
-    SettingWidget::intInput("Split message scrollback limit (requires restart)",
+    SettingWidget::intInput("Default channel history length",
                             s.scrollbackSplitLimit,
                             {
                                 .min = 100,
-                                .max = 100000,
+                                .max = 1000000,
                                 .singleStep = 100,
                             })
+        ->addTo(layout);
+
+    SettingWidget::checkbox("Log message cache performance every 30 seconds",
+                            s.cachePerformanceLogging)
         ->addTo(layout);
 
     SettingWidget::intInput("Usercard scrollback limit (requires restart)",

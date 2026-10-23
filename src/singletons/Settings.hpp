@@ -697,6 +697,16 @@ public:
         1000,
     };
 
+    QStringSetting channelScrollbackOverrides = {
+        "/misc/scrollback/channelOverrides", "{}"};
+    BoolSetting cachePerformanceLogging = {
+        "/misc/scrollback/performanceLogging", false};
+
+    /// A missing override follows the default. Zero removes an override.
+    std::optional<int> channelScrollbackOverride(const QString &channel) const;
+    int channelScrollbackLimit(const QString &channel) const;
+    void setChannelScrollbackOverride(const QString &channel, int limit);
+
     EnumStringSetting<ChatSendProtocol> chatSendProtocol = {
         "/misc/chatSendProtocol", ChatSendProtocol::Default};
 

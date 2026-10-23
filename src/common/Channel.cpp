@@ -42,16 +42,29 @@ namespace chatterino {
 //
 // Channel
 //
-Channel::Channel(const QString &name, Type type)
+Channel::Channel(const QString &name, Type type,
+                 std::optional<size_t> messageLimit)
     : completionModel(new TabCompletionModel(*this, nullptr))
     , lastDate_(QDate::currentDate())
     , name_(name)
-    , messages_(getSettings()->scrollbackSplitLimit)
+    , messages_(messageLimit.value_or(getSettings()->channelScrollbackLimit(
+          type == Type::Twitch ? name : QString{})))
     , type_(type)
 {
     if (this->isTwitchChannel())
     {
         this->platform_ = "twitch";
+    }
+    if (!messageLimit)
+    {
+        auto refreshLimit = [this] {
+            this->setMessageLimit(getSettings()->channelScrollbackLimit(
+                this->type_ == Type::Twitch ? this->name_ : QString{}));
+        };
+        getSettings()->scrollbackSplitLimit.connect(
+            refreshLimit, this->historySettingsConnections_, false);
+        getSettings()->channelScrollbackOverrides.connect(
+            refreshLimit, this->historySettingsConnections_, false);
     }
 }
 
@@ -102,6 +115,32 @@ bool Channel::hasMessages() const
 size_t Channel::countMessages() const
 {
     return this->messages_.size();
+}
+
+size_t Channel::messageLimit() const
+{
+    return this->messages_.limit();
+}
+
+size_t Channel::messageIDIndexSize() const
+{
+    return this->messageIDIndex_.size();
+}
+
+void Channel::setMessageLimit(size_t limit)
+{
+    if (this->messageLimit() == limit)
+    {
+        return;
+    }
+    auto removed = this->messages_.setLimit(limit);
+    this->messageIDIndexValid_ = false;
+    this->messageIDIndex_.clear();
+    for (const auto &message : removed)
+    {
+        this->messageRemovedFromStart(message);
+    }
+    this->messageLimitChanged.invoke(this->messageLimit());
 }
 
 std::vector<MessagePtr> Channel::getMessageSnapshot() const
@@ -163,7 +202,21 @@ void Channel::addMessage(MessagePtr message, MessageContext context,
 
     if (this->messages_.pushBack(message, deleted))
     {
+        if (this->messageIDIndexValid_)
+        {
+            auto it = this->messageIDIndex_.find(deleted->id);
+            if (it != this->messageIDIndex_.end() &&
+                it->second.lock() == deleted)
+            {
+                this->messageIDIndex_.erase(it);
+            }
+        }
         this->messageRemovedFromStart(deleted);
+    }
+
+    if (this->messageIDIndexValid_ && !message->id.isEmpty())
+    {
+        this->messageIDIndex_[message->id] = message;
     }
 
     this->messageAppended.invoke(message, overridingFlags);
@@ -185,15 +238,30 @@ void Channel::addSystemMessage(const QString &contents,
 
 void Channel::addOrReplaceTimeout(MessagePtr message, const QDateTime &now)
 {
+    const auto user = message->timeoutUser;
+    MessagePtr pending;
     addOrReplaceChannelTimeout(
-        this->getMessageSnapshot(), std::move(message), now,
+        this->getMessageSnapshot(20), std::move(message), now,
         [this](auto /*idx*/, auto msg, auto replacement) {
             this->replaceMessage(msg, replacement);
         },
-        [this](auto msg) {
-            this->addMessage(msg, MessageContext::Original);
+        [&pending](auto msg) {
+            pending = std::move(msg);
         },
-        true);
+        false);
+    this->messages_.forEach([&](const auto &msg) {
+        if (msg->loginName == user &&
+            msg->flags.hasNone(
+                {MessageFlag::ModerationAction, MessageFlag::Whisper}))
+        {
+            msg->flags.set(MessageFlag::Disabled);
+            msg->flags.set(MessageFlag::InvalidReplyTarget);
+        }
+    });
+    if (pending)
+    {
+        this->addMessage(pending, MessageContext::Original);
+    }
 }
 
 void Channel::addOrReplaceClearChat(MessagePtr message, const QDateTime &now)
@@ -237,6 +305,9 @@ void Channel::addMessagesAtStart(const std::vector<MessagePtr> &_messages)
 
     std::vector<MessagePtr> addedMessages =
         this->messages_.pushFront(_messages);
+
+    this->messageIDIndex_.clear();
+    this->messageIDIndexValid_ = false;
 
     if (addedMessages.size() != 0)
     {
@@ -286,60 +357,42 @@ void Channel::fillInMissingMessages(const std::vector<MessagePtr> &messages)
         existingMessageIds.insert(msg->id);
     }
 
-    bool anyInserted = false;
-
-    // Keep track of the last message in the channel. We need this value
-    // to allow concurrent appends to the end of the channel while still
-    // being able to insert just-loaded historical messages at the end
-    // in the correct place.
-    auto lastMsg = snapshot[snapshot.size() - 1];
+    std::vector<MessagePtr> incoming;
+    incoming.reserve(messages.size());
     for (const auto &msg : messages)
     {
-        // check if message already exists
-        if (existingMessageIds.count(msg->id) != 0)
+        if (!msg->id.isEmpty() && !existingMessageIds.insert(msg->id).second)
         {
             continue;
         }
-
-        // If we get to this point, we know we'll be inserting a message
-        anyInserted = true;
-
-        bool insertedFlag = false;
-        for (const auto &snapshotMsg : snapshot)
-        {
-            if (snapshotMsg->flags.has(MessageFlag::System))
-            {
-                continue;
-            }
-
-            if (msg->timestamp < snapshotMsg->timestamp)
-            {
-                // We found the first message that comes after the current message.
-                // Therefore, we can put the current message directly before. We
-                // assume that the messages we are filling in are in ascending
-                // order by timestamp.
-                this->messages_.insertBefore(snapshotMsg, msg);
-                insertedFlag = true;
-                break;
-            }
-        }
-
-        if (!insertedFlag)
-        {
-            // We never found a message already in the channel that came after
-            // the current message. Put it at the end and make sure to update
-            // which message is considered "the end".
-            this->messages_.insertAfter(lastMsg, msg);
-            lastMsg = msg;
-        }
+        incoming.push_back(msg);
     }
-
-    if (anyInserted)
+    if (incoming.empty())
     {
-        // We only invoke a signal once at the end of filling all messages to
-        // prevent doing any unnecessary repaints.
-        this->filledInMessages.invoke(messages);
+        return;
     }
+    std::stable_sort(incoming.begin(), incoming.end(),
+                     [](const auto &a, const auto &b) {
+                         return a->timestamp < b->timestamp;
+                     });
+    std::vector<MessagePtr> merged;
+    merged.reserve(snapshot.size() + incoming.size());
+    size_t next = 0;
+    for (const auto &msg : incoming)
+    {
+        while (next < snapshot.size() &&
+               (snapshot[next]->flags.has(MessageFlag::System) ||
+                snapshot[next]->timestamp <= msg->timestamp))
+        {
+            merged.push_back(snapshot[next++]);
+        }
+        merged.push_back(msg);
+    }
+    merged.insert(merged.end(), snapshot.begin() + next, snapshot.end());
+    this->messages_.replaceAll(merged);
+    this->messageIDIndex_.clear();
+    this->messageIDIndexValid_ = false;
+    this->filledInMessages.invoke(messages);
 }
 
 void Channel::replaceMessage(const MessagePtr &message,
@@ -352,6 +405,8 @@ void Channel::replaceMessage(const MessagePtr &message,
     }
 
     replacement->freeze();
+    this->messageIDIndex_.clear();
+    this->messageIDIndexValid_ = false;
     int index = this->messages_.replaceItem(message, replacement);
 
     if (index >= 0)
@@ -371,6 +426,8 @@ void Channel::replaceMessage(size_t index, const MessagePtr &replacement)
     replacement->freeze();
 
     MessagePtr prev;
+    this->messageIDIndex_.clear();
+    this->messageIDIndexValid_ = false;
     if (this->messages_.replaceItem(index, replacement, &prev))
     {
         this->messageReplaced.invoke(index, prev, replacement);
@@ -388,10 +445,13 @@ void Channel::replaceMessage(size_t hint, const MessagePtr &message,
 
     replacement->freeze();
 
+    this->messageIDIndex_.clear();
+    this->messageIDIndexValid_ = false;
     auto index = this->messages_.replaceItem(hint, message, replacement);
     if (index >= 0)
     {
-        this->messageReplaced.invoke(hint, message, replacement);
+        this->messageReplaced.invoke(static_cast<size_t>(index), message,
+                                     replacement);
     }
 }
 
@@ -413,11 +473,30 @@ void Channel::clearMessages()
     }
 
     this->messages_.clear();
+    this->messageIDIndex_.clear();
+    this->messageIDIndexValid_ = false;
     this->messagesCleared.invoke();
 }
 
 MessagePtr Channel::findMessageByID(QStringView messageID)
 {
+    // Small queues are cheaper to scan than to maintain a hash table.
+    if (this->messages_.size() >= 10000 && !messageID.isEmpty())
+    {
+        if (!this->messageIDIndexValid_)
+        {
+            this->messageIDIndex_.clear();
+            this->messages_.forEach([this](const auto &msg) {
+                if (!msg->id.isEmpty())
+                {
+                    this->messageIDIndex_[msg->id] = msg;
+                }
+            });
+            this->messageIDIndexValid_ = true;
+        }
+        auto it = this->messageIDIndex_.find(messageID.toString());
+        return it == this->messageIDIndex_.end() ? nullptr : it->second.lock();
+    }
     MessagePtr res;
 
     if (auto msg = this->messages_.rfind([messageID](const MessagePtr &msg) {
@@ -433,7 +512,14 @@ MessagePtr Channel::findMessageByID(QStringView messageID)
 
 void Channel::applySimilarityFilters(const MessagePtr &message) const
 {
-    setSimilarityFlags(message, this->messages_.getSnapshot());
+    if (!getSettings()->similarityEnabled)
+    {
+        return;
+    }
+    setSimilarityFlags(
+        message,
+        this->messages_.lastN(static_cast<size_t>(std::max(
+            0, getSettings()->hideSimilarMaxMessagesToCheck.getValue()))));
 }
 
 MessageSinkTraits Channel::sinkTraits() const
