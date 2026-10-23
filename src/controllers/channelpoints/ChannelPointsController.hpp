@@ -4,20 +4,31 @@
 
 #pragma once
 
-#include "common/websockets/WebSocketPool.hpp"
-#include "controllers/channelpoints/ChannelPointsClient.hpp"
-#include "controllers/channelpoints/ChannelPointsModels.hpp"
-#include "util/ExponentialBackoff.hpp"
+#include "controllers/channelpoints/ChannelPointsTypes.hpp"
 
-#include <QObject>
+#include <pajlada/signals/scoped-connection.hpp>
 #include <QHash>
+#include <QJsonObject>
+#include <QObject>
+#include <QSet>
 #include <QTimer>
-#include <QUrl>
 
+#include <functional>
 #include <memory>
+#include <optional>
+#include <vector>
 
 namespace chatterino {
 
+class ChannelPointsAuth;
+class HermesClient;
+class NetworkResult;
+
+/// Redeems channel point rewards and runs the redeem queues.
+///
+/// Talks to Twitch directly: GQL for loading rewards and redeeming, Hermes for
+/// live updates (balance, reward changes). A channel is tracked while a popup
+/// for it is open or while it has queued redeems.
 class ChannelPointsController : public QObject
 {
     Q_OBJECT
@@ -28,140 +39,148 @@ public:
 
     void stop();
 
+    ChannelPointsAuth *auth();
+
+    /// A popup for the channel opened.
     void watchChannel(const QString &channelLogin);
+    /// A popup for the channel closed. Queues keep running.
     void unwatchChannel(const QString &channelLogin);
     void refreshChannel(const QString &channelLogin);
 
     [[nodiscard]] ChannelPointsViewState getViewState(
-        const QString &channelLogin) const;
+        const QString &channelLogin);
 
-    bool redeemReward(const QString &channelLogin,
-                      const ChannelPointRewardData &reward,
-                      const QString &redeemInput = {});
-    bool armQueueOnce(const QString &channelLogin, const QString &rewardId,
-                      const QString &redeemInput = {});
-    bool setRepeatMode(const QString &channelLogin, const QString &rewardId,
-                       bool enabled, const QString &redeemInput = {});
-    void clearQueue(const QString &channelLogin);
+    /// Redeems the reward right away.
+    ///
+    /// @param confirmedCost The cost the user confirmed. If the reward's cost
+    ///        changed in the meantime, it isn't redeemed.
+    void redeemNow(const QString &channelLogin, const QString &rewardId,
+                   const QString &textInput, int confirmedCost);
+    /// Redeems the reward as soon as (Once) or every time (Repeat) it's
+    /// available.
+    void queueReward(const QString &channelLogin, const QString &rewardId,
+                     ChannelPointQueueMode mode, const QString &textInput,
+                     int confirmedCost);
+    void cancelQueue(const QString &channelLogin, const QString &rewardId);
+    void cancelAllQueues(const QString &channelLogin);
+
+    /// Number of queued redeems for the channel.
+    [[nodiscard]] int queuedCount(const QString &channelLogin) const;
 
 Q_SIGNALS:
+    /// Something about the channel changed. Empty login = all channels.
     void channelStateChanged(const QString &channelLogin);
 
 private:
+    struct Attempt {
+        QString transactionId;
+        QString textInput;
+        /// Cost the user agreed to. We never redeem for a different cost.
+        int confirmedCost = 0;
+        bool manual = false;
+        /// Retries reusing `transactionId` after getting no answer.
+        int sameTransactionRetries = 0;
+        bool regeneratedTransaction = false;
+        bool refreshedOnce = false;
+    };
+
     struct RewardRuntime {
-        ChannelPointRewardData reward;
+        PointsReward reward;
         ChannelPointQueueMode queueMode = ChannelPointQueueMode::None;
-        bool inFlight = false;
-        qint64 lastAttemptAt = 0;
-        quint64 queuedOnceGeneration = 0;
-        QString inFlightTransactionId;
         QString queuedInput;
-        QString lastResult;
+        int queuedCost = 0;
+        std::optional<Attempt> inFlight;
+        /// Waiting for a reload before retrying (PROPERTIES_MISMATCH).
+        std::optional<Attempt> retryAfterReload;
+        QDateTime nextAttemptAt;
+        int consecutiveFailures = 0;
+        ChannelPointResult lastResult;
     };
 
     struct ChannelRuntime {
+        QString login;
         QString channelId;
-        int visibleRefs = 0;
-        int balance = 0;
-        bool hasBalance = false;
-        bool availableClaim = false;
-        bool subscribed = false;
-        bool loadingBalance = false;
-        bool loadingRewards = false;
-        QString lastError;
-        QDateTime lastUpdated;
+        QString displayName;
+        int watchers = 0;
+        std::optional<int> balance;
+        bool loading = false;
+        bool reloadQueued = false;
+        bool loaded = false;
+        QString error;
+        QDateTime lastLoadedAt;
         QHash<QString, RewardRuntime> rewards;
-        QVector<QString> rewardOrder;
+        QStringList order;
     };
 
-    enum class RequestKind {
-        ReplaceSubscriptions,
-        GetRewards,
-        GetChannelPoints,
-        Redeem,
+    struct GqlResponse {
+        std::optional<int> status;
+        QJsonObject root;
+        /// Set if there was no usable response (network error, 5xx).
+        QString transportError;
+        bool unauthorized = false;
     };
 
-    struct RequestContext {
-        RequestKind kind = RequestKind::ReplaceSubscriptions;
-        QString channelLogin;
-        QString rewardId;
-        QString transactionId;
-    };
+    void ensureInitialized();
+    void updateChatterinoUser();
+    void handleAuthChanged();
+    void handleHermesConnected(bool connected);
+    void handleHermesNotification(const QString &topic,
+                                  const QJsonObject &message);
 
-    class Listener;
+    ChannelRuntime *findChannel(const QString &login);
+    const ChannelRuntime *findChannel(const QString &login) const;
+    ChannelRuntime *findChannelById(const QString &channelId);
+    ChannelRuntime &getOrCreateChannel(const QString &login);
+    [[nodiscard]] bool isActive(const ChannelRuntime &channel) const;
+    [[nodiscard]] bool hasQueues(const ChannelRuntime &channel) const;
 
-    ChannelRuntime &getOrCreateChannel(const QString &channelLogin);
-    const ChannelRuntime *findChannel(const QString &channelLogin) const;
-    RewardRuntime *findReward(const QString &channelLogin, const QString &rewardId);
-    const RewardRuntime *findReward(const QString &channelLogin,
-                                    const QString &rewardId) const;
+    void updateTopics();
+    void updateTicking();
+    void emitChanged(const QString &login);
 
-    void ensureConnected();
-    void openSocket();
-    void closeSocketIfIdle();
-    void syncSubscriptions();
-    void requestSnapshots(const QString &channelLogin);
+    void postGql(const QString &operation,
+                 const std::function<QJsonObject(bool)> &buildBody,
+                 std::function<void(GqlResponse)> callback,
+                 bool inlineQuery = false);
 
-    void sendReplaceSubscriptions();
-    QString nextRequestId();
-    QString nextTransactionId();
+    void loadChannel(const QString &login);
+    void handleContextLoaded(const QString &login, const GqlResponse &response);
+    void scheduleReload(const QString &login, int delayMs);
 
-    void handleSocketOpened();
-    void handleSocketClosed();
-    void handleRawMessage(const QByteArray &payload);
-    void handleParsedMessage(const ChannelPointsClient::ParsedMessage &message);
-    void handleReplaceSubscriptions(
-        const ChannelPointsClient::ParsedMessage &message);
-    void handleChannelPointsSnapshot(
-        const ChannelPointsClient::ParsedMessage &message);
-    void handleRewardsSnapshot(const ChannelPointsClient::ParsedMessage &message);
-    void handleRedeemResult(const ChannelPointsClient::ParsedMessage &message);
-    void handleError(const ChannelPointsClient::ParsedMessage &message);
-    void handleEvent(const ChannelPointsClient::ParsedMessage &message);
+    void tick();
+    void tryQueued(ChannelRuntime &channel);
+    void startAttempt(ChannelRuntime &channel, RewardRuntime &reward,
+                      Attempt attempt);
+    void handleRedeemResponse(const QString &login, const QString &rewardId,
+                              Attempt attempt, const GqlResponse &response);
+    void handleRedeemSuccess(ChannelRuntime &channel, RewardRuntime &reward,
+                             const Attempt &attempt, const QString &note);
+    void handleRedeemFailure(ChannelRuntime &channel, RewardRuntime &reward,
+                             const Attempt &attempt, const QString &message,
+                             bool keepQueue);
+    void retryLater(const QString &login, const QString &rewardId,
+                    Attempt attempt, int delayMs);
+    void stopQueue(RewardRuntime &reward, const QString &reason);
+    void cancelAllQueuesInternal(const QString &reason);
 
-    void scheduleReconnect();
-    void markAllDisconnected();
-    void emitChannelState(const QString &channelLogin);
+    static ChannelPointResult makeResult(ChannelPointResult::Kind kind,
+                                         const QString &text);
 
-    void tickQueue();
-    bool tryRedeem(const QString &channelLogin, RewardRuntime &reward,
-                   bool manual, const QString &manualInput = {});
-    bool canAttemptRedeem(const ChannelRuntime &channel,
-                          const RewardRuntime &reward) const;
-    void updateRewardSnapshot(ChannelRuntime &channel,
-                              const QVector<ChannelPointRewardData> &rewards);
-
-    [[nodiscard]] QStringList desiredSubscriptions() const;
-    [[nodiscard]] int queuedRewardCount(const ChannelRuntime &channel) const;
-    [[nodiscard]] bool shouldRefreshForRewardEvent(
-        const QString &channelLogin, const QJsonObject &payload) const;
-    [[nodiscard]] static QString buildRewardStatus(const ChannelRuntime &channel,
-                                                   const RewardRuntime &reward);
-    [[nodiscard]] static bool rewardHasCooldown(
-        const ChannelPointRewardData &reward);
-    [[nodiscard]] static bool rewardIsCurrentlyInStock(
-        const ChannelPointRewardData &reward);
-    [[nodiscard]] static QDateTime rewardCooldownAt(
-        const ChannelPointRewardData &reward);
-    [[nodiscard]] static QUrl successSoundUrl();
-
-    static constexpr int MAX_ACTIVE_QUEUES_PER_CHANNEL = 16;
-    static constexpr qint64 MIN_REDEEM_INTERVAL_MS = 3000;
-
-    ExponentialBackoff<5> reconnectBackoff_{
-        std::chrono::milliseconds{1000}};
-    QTimer reconnectTimer_;
-    QTimer queueTimer_;
-    WebSocketPool pool_{"channel-points"};
-    WebSocketHandle socket_;
-    QHash<QString, ChannelRuntime> channels_;
-    QHash<QString, RequestContext> pendingRequests_;
-    bool socketOpening_ = false;
-    bool transportConnected_ = false;
-    bool sessionReady_ = false;
+    std::unique_ptr<ChannelPointsAuth> auth_;
+    std::unique_ptr<HermesClient> hermes_;
+    bool initialized_ = false;
     bool stopping_ = false;
-    quint64 nextRequestId_ = 1;
-    quint64 nextTransactionId_ = 1;
+    QString lastToken_;
+    QString lastUserId_;
+    ChannelPointsAuthState lastAuthState_ =
+        ChannelPointsAuthState::NoChatterinoAccount;
+    QString sessionId_;
+
+    QHash<QString, ChannelRuntime> channels_;
+    QTimer tickTimer_;
+    QHash<QString, QTimer *> reloadTimers_;
+
+    pajlada::Signals::ScopedConnection currentUserConnection_;
 };
 
 }  // namespace chatterino

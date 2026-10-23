@@ -5,90 +5,102 @@
 #include "controllers/channelpoints/ChannelPointsController.hpp"
 
 #include "Application.hpp"
-#include "common/QLogging.hpp"
+#include "common/network/NetworkRequest.hpp"
+#include "common/network/NetworkResult.hpp"
+#include "controllers/accounts/AccountController.hpp"
+#include "controllers/channelpoints/ChannelPointsApi.hpp"
+#include "controllers/channelpoints/ChannelPointsAuth.hpp"
+#include "controllers/channelpoints/ChannelPointsLog.hpp"
+#include "controllers/channelpoints/HermesClient.hpp"
 #include "controllers/sound/ISoundController.hpp"
+#include "providers/twitch/TwitchAccount.hpp"
 #include "singletons/Settings.hpp"
-#include "util/PostToThread.hpp"
 
-#include <QDateTime>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QPointer>
-#include <QSet>
+#include <QUrl>
 
 #include <algorithm>
 
 namespace chatterino {
 
-class ChannelPointsController::Listener : public WebSocketListener
-{
-public:
-    explicit Listener(QPointer<ChannelPointsController> controller)
-        : controller_(std::move(controller))
-    {
-    }
-
-    void onOpen() override
-    {
-        runInGuiThread([controller = this->controller_] {
-            if (controller)
-            {
-                controller->handleSocketOpened();
-            }
-        });
-    }
-
-    void onTextMessage(QByteArray data) override
-    {
-        runInGuiThread(
-            [controller = this->controller_, payload = std::move(data)] {
-                if (controller)
-                {
-                    controller->handleRawMessage(payload);
-                }
-            });
-    }
-
-    void onBinaryMessage(QByteArray data) override
-    {
-        this->onTextMessage(std::move(data));
-    }
-
-    void onClose(std::unique_ptr<WebSocketListener> /* self */) override
-    {
-        runInGuiThread([controller = this->controller_] {
-            if (controller)
-            {
-                controller->handleSocketClosed();
-            }
-        });
-    }
-
-private:
-    QPointer<ChannelPointsController> controller_;
-};
+using namespace channelpoints;
 
 namespace {
 
-constexpr auto ISO_DATE = Qt::ISODate;
+constexpr int TICK_INTERVAL_MS = 1000;
+/// How old the reward data of a channel with queues may get.
+constexpr qint64 MAX_QUEUE_DATA_AGE_MS = 60 * 1000;
+/// Same, but while live updates are down.
+constexpr qint64 MAX_QUEUE_DATA_AGE_DISCONNECTED_MS = 20 * 1000;
+/// Data younger than this is reused when a popup opens.
+constexpr qint64 FRESH_DATA_MS = 10 * 1000;
+/// Minimum gap between redeems of a repeating queue.
+constexpr int REPEAT_GAP_MS = 3000;
+constexpr int MAX_SAME_TRANSACTION_RETRIES = 3;
+constexpr int GQL_TIMEOUT_MS = 15 * 1000;
+
+const QString USER_AGENT = QStringLiteral(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
+    "like Gecko) Chrome/140.0.0.0 Safari/537.36");
+
+QString normalizeLogin(const QString &login)
+{
+    return login.trimmed().toLower();
+}
+
+/// Delay before a queue tries again after Twitch said "not now".
+int waitBackoffMs(int failures)
+{
+    static constexpr int STEPS[] = {5000, 10000, 30000, 60000};
+    const auto index = std::clamp(failures - 1, 0, int(std::size(STEPS)) - 1);
+    return STEPS[index];
+}
+
+QString modeName(ChannelPointQueueMode mode)
+{
+    switch (mode)
+    {
+        case ChannelPointQueueMode::Once:
+            return QStringLiteral("once");
+        case ChannelPointQueueMode::Repeat:
+            return QStringLiteral("repeat");
+        case ChannelPointQueueMode::None:
+            break;
+    }
+    return QStringLiteral("manual");
+}
+
+QUrl successSoundUrl()
+{
+    const auto customPath = getSettings()->pathHighlightSound.getValue();
+    if (!customPath.isEmpty())
+    {
+        return QUrl::fromLocalFile(customPath);
+    }
+    return QUrl("qrc:/sounds/ping2.wav");
+}
 
 }  // namespace
 
 ChannelPointsController::ChannelPointsController(QObject *parent)
     : QObject(parent)
+    , auth_(std::make_unique<ChannelPointsAuth>())
+    , hermes_(std::make_unique<HermesClient>())
+    , sessionId_(generateTransactionId())
 {
-    this->reconnectTimer_.setSingleShot(true);
-    QObject::connect(&this->reconnectTimer_, &QTimer::timeout, this, [this] {
-        if (!this->stopping_)
-        {
-            this->openSocket();
-        }
-    });
+    QObject::connect(this->auth_.get(), &ChannelPointsAuth::changed, this,
+                     &ChannelPointsController::handleAuthChanged);
+    QObject::connect(this->hermes_.get(), &HermesClient::connectedChanged, this,
+                     &ChannelPointsController::handleHermesConnected);
+    QObject::connect(this->hermes_.get(), &HermesClient::notification, this,
+                     &ChannelPointsController::handleHermesNotification);
+    QObject::connect(this->hermes_.get(), &HermesClient::authenticationFailed,
+                     this, [this](const QString &error) {
+                         this->auth_->reportTokenRejected("Hermes: " + error);
+                     });
 
-    this->queueTimer_.setInterval(500);
-    QObject::connect(&this->queueTimer_, &QTimer::timeout, this,
-                     &ChannelPointsController::tickQueue);
+    this->tickTimer_.setInterval(TICK_INTERVAL_MS);
+    QObject::connect(&this->tickTimer_, &QTimer::timeout, this,
+                     &ChannelPointsController::tick);
 }
 
 ChannelPointsController::~ChannelPointsController()
@@ -104,1021 +116,1241 @@ void ChannelPointsController::stop()
     }
 
     this->stopping_ = true;
-    this->reconnectTimer_.stop();
-    this->queueTimer_.stop();
-    this->pendingRequests_.clear();
-    this->socket_.close();
-    this->socket_ = {};
-    this->socketOpening_ = false;
-    this->transportConnected_ = false;
-    this->sessionReady_ = false;
+    this->tickTimer_.stop();
+    for (auto *timer : this->reloadTimers_)
+    {
+        timer->stop();
+    }
+    this->hermes_->stop();
 }
+
+ChannelPointsAuth *ChannelPointsController::auth()
+{
+    this->ensureInitialized();
+    return this->auth_.get();
+}
+
+void ChannelPointsController::ensureInitialized()
+{
+    if (this->initialized_)
+    {
+        return;
+    }
+    this->initialized_ = true;
+
+    this->currentUserConnection_ =
+        getApp()->getAccounts()->twitch.currentUserChanged.connect([this] {
+            this->updateChatterinoUser();
+        });
+    this->updateChatterinoUser();
+}
+
+void ChannelPointsController::updateChatterinoUser()
+{
+    auto user = getApp()->getAccounts()->twitch.getCurrent();
+    if (!user || user->isAnon())
+    {
+        this->auth_->setChatterinoUser({}, {});
+        return;
+    }
+    this->auth_->setChatterinoUser(user->getUserId(), user->getUserName());
+}
+
+// ---------------------------------------------------------------------------
+// Public API
 
 void ChannelPointsController::watchChannel(const QString &channelLogin)
 {
-    auto login = channelLogin.trimmed().toLower();
+    this->ensureInitialized();
+    const auto login = normalizeLogin(channelLogin);
     if (login.isEmpty())
     {
         return;
     }
 
     auto &channel = this->getOrCreateChannel(login);
-    channel.visibleRefs++;
-    channel.lastError.clear();
-    this->emitChannelState(login);
-    this->queueTimer_.start();
+    channel.watchers++;
 
-    this->ensureConnected();
-    this->sendReplaceSubscriptions();
+    const auto age = channel.lastLoadedAt.isValid()
+                         ? channel.lastLoadedAt.msecsTo(
+                               QDateTime::currentDateTimeUtc())
+                         : std::numeric_limits<qint64>::max();
+    if (!channel.loaded || age > FRESH_DATA_MS)
+    {
+        this->loadChannel(login);
+    }
+
+    this->updateTopics();
+    this->emitChanged(login);
 }
 
 void ChannelPointsController::unwatchChannel(const QString &channelLogin)
 {
-    auto login = channelLogin.trimmed().toLower();
-    auto *channel = this->findChannel(login);
-    if (!channel)
+    auto *channel = this->findChannel(normalizeLogin(channelLogin));
+    if (channel == nullptr)
     {
         return;
     }
 
-    auto &mutableChannel = this->channels_[login];
-    mutableChannel.visibleRefs = std::max(0, mutableChannel.visibleRefs - 1);
-    if (mutableChannel.visibleRefs == 0)
-    {
-        for (auto it = mutableChannel.rewards.begin(); it != mutableChannel.rewards.end();
-             ++it)
-        {
-            it->queueMode = ChannelPointQueueMode::None;
-            it->inFlight = false;
-            it->inFlightTransactionId.clear();
-            it->queuedInput.clear();
-            it->lastResult = "Inactive";
-        }
-        mutableChannel.subscribed = false;
-        mutableChannel.loadingBalance = false;
-        mutableChannel.loadingRewards = false;
-    }
-
-    this->emitChannelState(login);
-    this->sendReplaceSubscriptions();
-    this->closeSocketIfIdle();
+    channel->watchers = std::max(0, channel->watchers - 1);
+    this->updateTopics();
+    this->emitChanged(channel->login);
 }
 
 void ChannelPointsController::refreshChannel(const QString &channelLogin)
 {
-    const auto login = channelLogin.trimmed().toLower();
-    auto *channel = this->findChannel(login);
-    if (!channel || channel->visibleRefs <= 0)
-    {
-        return;
-    }
-
-    this->ensureConnected();
-    if (this->sessionReady_ && channel->subscribed)
-    {
-        this->requestSnapshots(login);
-    }
-    else
-    {
-        this->sendReplaceSubscriptions();
-    }
+    this->ensureInitialized();
+    this->loadChannel(normalizeLogin(channelLogin));
 }
 
 ChannelPointsViewState ChannelPointsController::getViewState(
-    const QString &channelLogin) const
+    const QString &channelLogin)
 {
-    const auto login = channelLogin.trimmed().toLower();
+    this->ensureInitialized();
+    const auto login = normalizeLogin(channelLogin);
+
     ChannelPointsViewState out{
         .channelLogin = login,
-        .transportConnected = this->transportConnected_,
-        .sessionReady = this->sessionReady_,
+        .auth = this->auth_->view(),
+        .liveUpdatesConnected = this->hermes_->isConnected(),
     };
 
     const auto *channel = this->findChannel(login);
-    if (!channel)
+    if (channel == nullptr)
     {
         return out;
     }
 
+    out.channelDisplayName = channel->displayName;
     out.channelId = channel->channelId;
-    out.subscribed = channel->subscribed;
-    out.loadingBalance = channel->loadingBalance;
-    out.loadingRewards = channel->loadingRewards;
-    out.hasBalance = channel->hasBalance;
-    out.availableClaim = channel->availableClaim;
+    out.loading = channel->loading;
+    out.loaded = channel->loaded;
+    out.error = channel->error;
+    out.lastLoadedAt = channel->lastLoadedAt;
     out.balance = channel->balance;
-    out.queuedRewardCount = this->queuedRewardCount(*channel);
-    out.lastError = channel->lastError;
-    out.lastUpdated = channel->lastUpdated;
+    out.queuedCount = this->queuedCount(login);
 
-    for (const auto &rewardId : channel->rewardOrder)
+    const auto now = QDateTime::currentDateTimeUtc();
+    for (const auto &rewardId : channel->order)
     {
-        const auto *reward = this->findReward(login, rewardId);
-        if (!reward)
+        auto it = channel->rewards.find(rewardId);
+        if (it == channel->rewards.end())
         {
             continue;
         }
-
-        const auto hasCooldown = rewardHasCooldown(reward->reward);
-        const auto isAvailable = this->canAttemptRedeem(*channel, *reward);
-        ChannelPointRewardView view{
-            .reward = reward->reward,
-            .queueMode = reward->queueMode,
-            .inFlight = reward->inFlight,
-            .canAfford = !channel->hasBalance || channel->balance >= reward->reward.cost,
-            .canRedeemNow = isAvailable && !reward->inFlight,
-            .hasCooldown = hasCooldown,
-            .isAvailable = isAvailable,
-            .statusText = buildRewardStatus(*channel, *reward),
-        };
-
-        if (reward->reward.isCustom)
-        {
-            out.customRewards.push_back(std::move(view));
-        }
-        else
-        {
-            out.automaticRewards.push_back(std::move(view));
-        }
+        const auto &runtime = it.value();
+        out.rewards.push_back(ChannelPointRewardView{
+            .reward = runtime.reward,
+            .block = evaluateReward(runtime.reward, channel->balance, now),
+            .queueMode = runtime.queueMode,
+            .inFlight = runtime.inFlight.has_value() ||
+                        runtime.retryAfterReload.has_value(),
+            .nextAttemptAt = runtime.nextAttemptAt,
+            .lastResult = runtime.lastResult,
+        });
     }
 
     return out;
 }
 
-bool ChannelPointsController::redeemReward(const QString &channelLogin,
-                                           const ChannelPointRewardData &reward,
-                                           const QString &redeemInput)
+void ChannelPointsController::redeemNow(const QString &channelLogin,
+                                        const QString &rewardId,
+                                        const QString &textInput,
+                                        int confirmedCost)
 {
-    auto *runtimeReward = this->findReward(channelLogin, reward.id);
-    if (!runtimeReward)
+    auto *channel = this->findChannel(normalizeLogin(channelLogin));
+    if (channel == nullptr)
     {
-        return false;
+        return;
     }
-
-    runtimeReward->queueMode = ChannelPointQueueMode::None;
-    runtimeReward->queuedInput.clear();
-    return this->tryRedeem(channelLogin.trimmed().toLower(), *runtimeReward, true,
-                           redeemInput);
-}
-
-bool ChannelPointsController::armQueueOnce(const QString &channelLogin,
-                                           const QString &rewardId,
-                                           const QString &redeemInput)
-{
-    auto login = channelLogin.trimmed().toLower();
-    auto *channel = this->findChannel(login);
-    auto *reward = this->findReward(login, rewardId);
-    if (!channel || !reward || reward->inFlight || !reward->reward.isRedeemable)
-    {
-        return false;
-    }
-
-    if (this->queuedRewardCount(*channel) >= MAX_ACTIVE_QUEUES_PER_CHANNEL &&
-        reward->queueMode == ChannelPointQueueMode::None)
-    {
-        return false;
-    }
-
-    if (reward->queueMode == ChannelPointQueueMode::Once)
-    {
-        reward->queueMode = ChannelPointQueueMode::None;
-        reward->queuedInput.clear();
-        reward->lastResult = "Stopped";
-    }
-    else
-    {
-        reward->queueMode = ChannelPointQueueMode::Once;
-        reward->queuedOnceGeneration++;
-        reward->queuedInput = redeemInput;
-        reward->lastResult = "Once";
-    }
-
-    this->emitChannelState(login);
-    return true;
-}
-
-bool ChannelPointsController::setRepeatMode(const QString &channelLogin,
-                                            const QString &rewardId,
-                                            bool enabled,
-                                            const QString &redeemInput)
-{
-    auto login = channelLogin.trimmed().toLower();
-    auto *channel = this->findChannel(login);
-    auto *reward = this->findReward(login, rewardId);
-    if (!channel || !reward || !reward->reward.isRedeemable)
-    {
-        return false;
-    }
-
-    if (enabled && this->queuedRewardCount(*channel) >= MAX_ACTIVE_QUEUES_PER_CHANNEL &&
-        reward->queueMode == ChannelPointQueueMode::None)
-    {
-        return false;
-    }
-
-    reward->queueMode = enabled ? ChannelPointQueueMode::Repeat
-                                : ChannelPointQueueMode::None;
-    reward->queuedInput = enabled ? redeemInput : QString();
-    reward->lastResult = enabled ? "Loop" : "Stopped";
-    this->emitChannelState(login);
-    return true;
-}
-
-void ChannelPointsController::clearQueue(const QString &channelLogin)
-{
-    auto login = channelLogin.trimmed().toLower();
-    auto *channel = this->findChannel(login);
-    if (!channel)
+    auto it = channel->rewards.find(rewardId);
+    if (it == channel->rewards.end() || it->inFlight || it->retryAfterReload)
     {
         return;
     }
 
-    auto &mutableChannel = this->channels_[login];
-    for (auto it = mutableChannel.rewards.begin(); it != mutableChannel.rewards.end();
-         ++it)
+    this->startAttempt(*channel, it.value(),
+                       Attempt{
+                           .transactionId = generateTransactionId(),
+                           .textInput = textInput,
+                           .confirmedCost = confirmedCost,
+                           .manual = true,
+                       });
+}
+
+void ChannelPointsController::queueReward(const QString &channelLogin,
+                                          const QString &rewardId,
+                                          ChannelPointQueueMode mode,
+                                          const QString &textInput,
+                                          int confirmedCost)
+{
+    auto *channel = this->findChannel(normalizeLogin(channelLogin));
+    if (channel == nullptr || mode == ChannelPointQueueMode::None)
     {
-        it->queueMode = ChannelPointQueueMode::None;
-        it->queuedInput.clear();
-        if (!it->inFlight)
+        return;
+    }
+    auto it = channel->rewards.find(rewardId);
+    if (it == channel->rewards.end())
+    {
+        return;
+    }
+
+    auto &reward = it.value();
+    reward.queueMode = mode;
+    reward.queuedInput = textInput;
+    reward.queuedCost = confirmedCost;
+    reward.consecutiveFailures = 0;
+    reward.nextAttemptAt = {};
+    reward.lastResult = makeResult(ChannelPointResult::Kind::Info,
+                                   mode == ChannelPointQueueMode::Once
+                                       ? QStringLiteral("Queued")
+                                       : QStringLiteral("Repeating"));
+    logInfo(QStringLiteral("Queue %1: #%2 \"%3\" cost=%4")
+                .arg(modeName(mode), channel->login, reward.reward.title)
+                .arg(confirmedCost));
+
+    this->updateTicking();
+    this->updateTopics();
+    this->tryQueued(*channel);
+    this->emitChanged(channel->login);
+}
+
+void ChannelPointsController::cancelQueue(const QString &channelLogin,
+                                          const QString &rewardId)
+{
+    auto *channel = this->findChannel(normalizeLogin(channelLogin));
+    if (channel == nullptr)
+    {
+        return;
+    }
+    auto it = channel->rewards.find(rewardId);
+    if (it == channel->rewards.end() ||
+        it->queueMode == ChannelPointQueueMode::None)
+    {
+        return;
+    }
+
+    logInfo(QStringLiteral("Queue cancelled: #%1 \"%2\"")
+                .arg(channel->login, it->reward.title));
+    it->queueMode = ChannelPointQueueMode::None;
+    it->queuedInput.clear();
+    it->lastResult =
+        makeResult(ChannelPointResult::Kind::Info, QStringLiteral("Cancelled"));
+
+    this->updateTicking();
+    this->updateTopics();
+    this->emitChanged(channel->login);
+}
+
+void ChannelPointsController::cancelAllQueues(const QString &channelLogin)
+{
+    auto *channel = this->findChannel(normalizeLogin(channelLogin));
+    if (channel == nullptr)
+    {
+        return;
+    }
+
+    for (auto &reward : channel->rewards)
+    {
+        if (reward.queueMode != ChannelPointQueueMode::None)
         {
-            it->lastResult = "Cleared";
+            reward.queueMode = ChannelPointQueueMode::None;
+            reward.queuedInput.clear();
+            reward.lastResult = makeResult(ChannelPointResult::Kind::Info,
+                                           QStringLiteral("Cancelled"));
+        }
+    }
+    logInfo(QStringLiteral("All queues cancelled: #%1").arg(channel->login));
+
+    this->updateTicking();
+    this->updateTopics();
+    this->emitChanged(channel->login);
+}
+
+int ChannelPointsController::queuedCount(const QString &channelLogin) const
+{
+    const auto *channel = this->findChannel(normalizeLogin(channelLogin));
+    if (channel == nullptr)
+    {
+        return 0;
+    }
+    return int(std::count_if(channel->rewards.begin(), channel->rewards.end(),
+                             [](const RewardRuntime &reward) {
+                                 return reward.queueMode !=
+                                        ChannelPointQueueMode::None;
+                             }));
+}
+
+// ---------------------------------------------------------------------------
+// Auth & live updates
+
+void ChannelPointsController::handleAuthChanged()
+{
+    const auto view = this->auth_->view();
+    const auto token = this->auth_->token();
+    const auto userId = this->auth_->userId();
+
+    const bool signedOut =
+        view.state == ChannelPointsAuthState::SignedOut ||
+        view.state == ChannelPointsAuthState::NoChatterinoAccount;
+    const bool userChanged = !userId.isEmpty() && userId != this->lastUserId_;
+
+    if ((signedOut && !this->lastUserId_.isEmpty()) ||
+        (userChanged && !this->lastUserId_.isEmpty()))
+    {
+        // Everything we know belongs to the previous account.
+        this->cancelAllQueuesInternal(QStringLiteral("Signed out"));
+        for (auto &channel : this->channels_)
+        {
+            channel.balance.reset();
+            channel.rewards.clear();
+            channel.order.clear();
+            channel.loaded = false;
+            channel.error.clear();
+            channel.lastLoadedAt = {};
+        }
+    }
+    if (signedOut)
+    {
+        this->lastUserId_.clear();
+    }
+    else if (!userId.isEmpty())
+    {
+        this->lastUserId_ = userId;
+    }
+
+    if (token != this->lastToken_)
+    {
+        this->lastToken_ = token;
+        this->hermes_->setToken(token);
+        if (!token.isEmpty())
+        {
+            for (auto &channel : this->channels_)
+            {
+                if (this->isActive(channel))
+                {
+                    this->loadChannel(channel.login);
+                }
+            }
         }
     }
 
-    mutableChannel.lastError.clear();
-    this->emitChannelState(login);
+    this->lastAuthState_ = view.state;
+    this->updateTopics();
+    this->emitChanged({});
 }
 
-ChannelPointsController::ChannelRuntime &ChannelPointsController::getOrCreateChannel(
-    const QString &channelLogin)
+void ChannelPointsController::handleHermesConnected(bool connected)
 {
-    return this->channels_[channelLogin];
+    if (connected)
+    {
+        // Catch up on anything we missed while disconnected.
+        for (auto &channel : this->channels_)
+        {
+            if (this->isActive(channel))
+            {
+                this->loadChannel(channel.login);
+            }
+        }
+    }
+    this->emitChanged({});
+}
+
+void ChannelPointsController::handleHermesNotification(
+    const QString & /*topic*/, const QJsonObject &message)
+{
+    const auto event = parsePointsEvent(message);
+    if (event.type == PointsEvent::Type::Unknown)
+    {
+        return;
+    }
+
+    auto *channel = this->findChannelById(event.channelId);
+    if (channel == nullptr)
+    {
+        return;
+    }
+
+    switch (event.type)
+    {
+        case PointsEvent::Type::BalanceUpdate:
+            channel->balance = event.balance;
+            break;
+
+        case PointsEvent::Type::RewardCreated:
+        case PointsEvent::Type::RewardUpdated: {
+            if (!channel->loaded || event.reward.id.isEmpty())
+            {
+                break;
+            }
+            auto it = channel->rewards.find(event.reward.id);
+            if (it == channel->rewards.end())
+            {
+                auto &runtime = channel->rewards[event.reward.id];
+                runtime.reward = event.reward;
+                runtime.reward.userRedemptionsThisStream = 0;
+                channel->order.append(event.reward.id);
+                break;
+            }
+
+            const auto oldCost = it->reward.cost;
+            applyLiveRewardUpdate(it->reward, event.reward);
+            if (it->queueMode != ChannelPointQueueMode::None &&
+                it->reward.cost != it->queuedCost)
+            {
+                this->stopQueue(it.value(),
+                                QStringLiteral("cost changed from %1 to %2")
+                                    .arg(oldCost)
+                                    .arg(it->reward.cost));
+            }
+        }
+        break;
+
+        case PointsEvent::Type::RewardDeleted: {
+            auto it = channel->rewards.find(event.reward.id);
+            if (it != channel->rewards.end())
+            {
+                if (it->queueMode != ChannelPointQueueMode::None)
+                {
+                    logWarning(QStringLiteral("Queue dropped: #%1 \"%2\" was "
+                                              "deleted by the channel")
+                                   .arg(channel->login, it->reward.title));
+                }
+                channel->rewards.erase(it);
+                channel->order.removeAll(event.reward.id);
+            }
+        }
+        break;
+
+        case PointsEvent::Type::RewardRedeemed: {
+            auto it = channel->rewards.find(event.reward.id);
+            if (it != channel->rewards.end())
+            {
+                // Carries the new cooldown/stock state.
+                applyLiveRewardUpdate(it->reward, event.reward);
+                if (event.redeemUserId == this->auth_->userId())
+                {
+                    logInfo(QStringLiteral("Twitch event: you redeemed #%1 \"%2\"")
+                                .arg(channel->login, it->reward.title));
+                    this->scheduleReload(channel->login, 1500);
+                }
+            }
+        }
+        break;
+
+        case PointsEvent::Type::Unknown:
+            break;
+    }
+
+    this->tryQueued(*channel);
+    this->updateTicking();
+    this->emitChanged(channel->login);
+}
+
+// ---------------------------------------------------------------------------
+// Channel bookkeeping
+
+ChannelPointsController::ChannelRuntime *ChannelPointsController::findChannel(
+    const QString &login)
+{
+    auto it = this->channels_.find(login);
+    return it == this->channels_.end() ? nullptr : &it.value();
 }
 
 const ChannelPointsController::ChannelRuntime *
-ChannelPointsController::findChannel(const QString &channelLogin) const
+    ChannelPointsController::findChannel(const QString &login) const
 {
-    auto it = this->channels_.find(channelLogin);
-    if (it == this->channels_.end())
+    auto it = this->channels_.find(login);
+    return it == this->channels_.end() ? nullptr : &it.value();
+}
+
+ChannelPointsController::ChannelRuntime *
+    ChannelPointsController::findChannelById(const QString &channelId)
+{
+    if (channelId.isEmpty())
     {
         return nullptr;
     }
-    return &it.value();
-}
-
-ChannelPointsController::RewardRuntime *ChannelPointsController::findReward(
-    const QString &channelLogin, const QString &rewardId)
-{
-    auto channelIt = this->channels_.find(channelLogin);
-    if (channelIt == this->channels_.end())
+    for (auto &channel : this->channels_)
     {
-        return nullptr;
-    }
-
-    auto rewardIt = channelIt->rewards.find(rewardId);
-    if (rewardIt == channelIt->rewards.end())
-    {
-        return nullptr;
-    }
-
-    return &rewardIt.value();
-}
-
-const ChannelPointsController::RewardRuntime *
-ChannelPointsController::findReward(const QString &channelLogin,
-                                    const QString &rewardId) const
-{
-    auto channelIt = this->channels_.find(channelLogin);
-    if (channelIt == this->channels_.end())
-    {
-        return nullptr;
-    }
-
-    auto rewardIt = channelIt->rewards.find(rewardId);
-    if (rewardIt == channelIt->rewards.end())
-    {
-        return nullptr;
-    }
-
-    return &rewardIt.value();
-}
-
-void ChannelPointsController::ensureConnected()
-{
-    if (this->transportConnected_ || this->socketOpening_ || this->stopping_)
-    {
-        return;
-    }
-
-    if (this->desiredSubscriptions().isEmpty())
-    {
-        return;
-    }
-
-    this->openSocket();
-}
-
-void ChannelPointsController::openSocket()
-{
-    if (this->stopping_ || this->socketOpening_)
-    {
-        return;
-    }
-
-    this->socketOpening_ = true;
-    this->socket_ = this->pool_.createSocket(
-        WebSocketOptions{
-            .url = QUrl("ws://127.0.0.1:8765/channel-points/ws"),
-        },
-        std::make_unique<Listener>(this));
-}
-
-void ChannelPointsController::closeSocketIfIdle()
-{
-    if (!this->desiredSubscriptions().isEmpty())
-    {
-        return;
-    }
-
-    this->reconnectTimer_.stop();
-    this->queueTimer_.stop();
-    this->socket_.close();
-    this->socket_ = {};
-    this->socketOpening_ = false;
-    this->transportConnected_ = false;
-    this->sessionReady_ = false;
-    this->markAllDisconnected();
-}
-
-void ChannelPointsController::syncSubscriptions()
-{
-    if (!this->transportConnected_ || !this->sessionReady_)
-    {
-        return;
-    }
-
-    this->sendReplaceSubscriptions();
-}
-
-void ChannelPointsController::requestSnapshots(const QString &channelLogin)
-{
-    if (!this->sessionReady_)
-    {
-        return;
-    }
-
-    auto &channel = this->getOrCreateChannel(channelLogin);
-    channel.loadingBalance = true;
-    channel.loadingRewards = true;
-
-    auto pointsRequestId = this->nextRequestId();
-    this->pendingRequests_.insert(pointsRequestId,
-                                  RequestContext{
-                                      .kind = RequestKind::GetChannelPoints,
-                                      .channelLogin = channelLogin,
-                                  });
-    this->socket_.sendText(ChannelPointsClient::buildGetChannelPointsRequest(
-        pointsRequestId, channelLogin));
-
-    auto rewardsRequestId = this->nextRequestId();
-    this->pendingRequests_.insert(rewardsRequestId,
-                                  RequestContext{
-                                      .kind = RequestKind::GetRewards,
-                                      .channelLogin = channelLogin,
-                                  });
-    this->socket_.sendText(ChannelPointsClient::buildGetRewardsRequest(
-        rewardsRequestId, channelLogin));
-
-    this->emitChannelState(channelLogin);
-}
-
-void ChannelPointsController::sendReplaceSubscriptions()
-{
-    const auto desired = this->desiredSubscriptions();
-    if (desired.isEmpty())
-    {
-        return;
-    }
-
-    this->ensureConnected();
-    if (!this->sessionReady_)
-    {
-        return;
-    }
-
-    auto requestId = this->nextRequestId();
-    this->pendingRequests_.insert(requestId,
-                                  RequestContext{
-                                      .kind = RequestKind::ReplaceSubscriptions,
-                                  });
-    this->socket_.sendText(ChannelPointsClient::buildReplaceSubscriptionsRequest(
-        requestId, desired));
-}
-
-QString ChannelPointsController::nextRequestId()
-{
-    return QString("channel-points-%1").arg(this->nextRequestId_++);
-}
-
-QString ChannelPointsController::nextTransactionId()
-{
-    return QString("cp-tx-%1").arg(this->nextTransactionId_++);
-}
-
-void ChannelPointsController::handleSocketOpened()
-{
-    this->socketOpening_ = false;
-    this->transportConnected_ = true;
-    for (auto it = this->channels_.begin(); it != this->channels_.end(); ++it)
-    {
-        this->emitChannelState(it.key());
-    }
-}
-
-void ChannelPointsController::handleSocketClosed()
-{
-    this->socket_ = {};
-    this->socketOpening_ = false;
-    this->transportConnected_ = false;
-    this->sessionReady_ = false;
-    this->markAllDisconnected();
-
-    if (!this->desiredSubscriptions().isEmpty() && !this->stopping_)
-    {
-        this->scheduleReconnect();
-    }
-}
-
-void ChannelPointsController::handleRawMessage(const QByteArray &payload)
-{
-    QString error;
-    auto parsed = ChannelPointsClient::parseMessage(payload, error);
-    if (!parsed)
-    {
-        qCWarning(chatterinoWebsocket)
-            << "Failed to parse channel points message:" << error << payload;
-        return;
-    }
-
-    this->handleParsedMessage(*parsed);
-}
-
-void ChannelPointsController::handleParsedMessage(
-    const ChannelPointsClient::ParsedMessage &message)
-{
-    switch (message.kind)
-    {
-        case ChannelPointsClient::MessageKind::Connected: {
-            this->sessionReady_ = true;
-            this->reconnectBackoff_.reset();
-            this->syncSubscriptions();
-        }
-        break;
-        case ChannelPointsClient::MessageKind::SubscriptionsReplaced:
-            this->handleReplaceSubscriptions(message);
-            break;
-        case ChannelPointsClient::MessageKind::ChannelPointsSnapshot:
-            this->handleChannelPointsSnapshot(message);
-            break;
-        case ChannelPointsClient::MessageKind::RewardsSnapshot:
-            this->handleRewardsSnapshot(message);
-            break;
-        case ChannelPointsClient::MessageKind::RedeemResult:
-            this->handleRedeemResult(message);
-            break;
-        case ChannelPointsClient::MessageKind::Error:
-            this->handleError(message);
-            break;
-        case ChannelPointsClient::MessageKind::Event:
-            this->handleEvent(message);
-            break;
-        case ChannelPointsClient::MessageKind::Subscribed:
-        case ChannelPointsClient::MessageKind::Unsubscribed:
-        case ChannelPointsClient::MessageKind::Unknown:
-        default:
-            break;
-    }
-}
-
-void ChannelPointsController::handleReplaceSubscriptions(
-    const ChannelPointsClient::ParsedMessage &message)
-{
-    if (!message.requestId.isEmpty())
-    {
-        this->pendingRequests_.remove(message.requestId);
-    }
-
-    const auto desired = this->desiredSubscriptions();
-    for (auto it = this->channels_.begin(); it != this->channels_.end(); ++it)
-    {
-        it->subscribed = desired.contains(it.key());
-        this->emitChannelState(it.key());
-    }
-
-    for (const auto &channelLogin : desired)
-    {
-        this->requestSnapshots(channelLogin);
-    }
-}
-
-void ChannelPointsController::handleChannelPointsSnapshot(
-    const ChannelPointsClient::ParsedMessage &message)
-{
-    const auto channelLogin = message.channelLogin.trimmed().toLower();
-    auto &channel = this->getOrCreateChannel(channelLogin);
-    channel.channelId = message.channelId;
-    channel.loadingBalance = false;
-    channel.lastError.clear();
-    channel.lastUpdated = QDateTime::currentDateTimeUtc();
-
-    const auto points = message.root.value("points").toObject();
-    channel.balance = points.value("balance").toInt();
-    channel.hasBalance = true;
-    channel.availableClaim = !points.value("availableClaim").isNull() &&
-                             !points.value("availableClaim").isUndefined();
-
-    if (!message.requestId.isEmpty())
-    {
-        this->pendingRequests_.remove(message.requestId);
-    }
-    this->emitChannelState(channelLogin);
-}
-
-void ChannelPointsController::handleRewardsSnapshot(
-    const ChannelPointsClient::ParsedMessage &message)
-{
-    const auto channelLogin = message.channelLogin.trimmed().toLower();
-    auto &channel = this->getOrCreateChannel(channelLogin);
-    channel.channelId = message.channelId;
-    channel.loadingRewards = false;
-    channel.lastError.clear();
-    channel.lastUpdated = QDateTime::currentDateTimeUtc();
-
-    const auto rewards = message.root.value("rewards").toObject();
-    if (rewards.contains("balance"))
-    {
-        channel.balance = rewards.value("balance").toInt(channel.balance);
-        channel.hasBalance = true;
-    }
-    channel.availableClaim = !rewards.value("availableClaim").isNull() &&
-                             !rewards.value("availableClaim").isUndefined();
-
-    auto rewardList =
-        ChannelPointsClient::parseRewards(rewards.value("customRewards").toArray(),
-                                          true);
-    const auto automaticRewards = ChannelPointsClient::parseRewards(
-        rewards.value("automaticRewards").toArray(), false);
-    rewardList += automaticRewards;
-    this->updateRewardSnapshot(channel, rewardList);
-
-    if (!message.requestId.isEmpty())
-    {
-        this->pendingRequests_.remove(message.requestId);
-    }
-    this->emitChannelState(channelLogin);
-}
-
-void ChannelPointsController::handleRedeemResult(
-    const ChannelPointsClient::ParsedMessage &message)
-{
-    auto requestIt = this->pendingRequests_.find(message.requestId);
-    if (requestIt == this->pendingRequests_.end() ||
-        requestIt->kind != RequestKind::Redeem)
-    {
-        return;
-    }
-    const auto ctx = requestIt.value();
-    this->pendingRequests_.erase(requestIt);
-
-    auto *reward = this->findReward(ctx.channelLogin, ctx.rewardId);
-    auto *channel = this->findChannel(ctx.channelLogin);
-    if (!reward || !channel)
-    {
-        return;
-    }
-
-    reward->inFlight = false;
-    reward->inFlightTransactionId.clear();
-
-    const auto result = message.root.value("result").toObject();
-    const auto ok = result.value("ok").toBool(false);
-    const auto error = result.value("error").toString();
-    reward->lastResult = ok ? "Sent" : (error.isEmpty() ? "Failed" : error);
-
-    if (ok)
-    {
-        if (reward->queueMode == ChannelPointQueueMode::Once)
+        if (channel.channelId == channelId)
         {
-            reward->queueMode = ChannelPointQueueMode::None;
-            reward->queuedInput.clear();
+            return &channel;
         }
-
-        getApp()->getSound()->play(successSoundUrl());
     }
-
-    this->requestSnapshots(ctx.channelLogin);
-    this->emitChannelState(ctx.channelLogin);
+    return nullptr;
 }
 
-void ChannelPointsController::handleError(
-    const ChannelPointsClient::ParsedMessage &message)
+ChannelPointsController::ChannelRuntime &
+    ChannelPointsController::getOrCreateChannel(const QString &login)
 {
-    RequestContext ctx;
-    auto requestIt = this->pendingRequests_.find(message.requestId);
-    if (requestIt != this->pendingRequests_.end())
+    auto &channel = this->channels_[login];
+    channel.login = login;
+    return channel;
+}
+
+bool ChannelPointsController::hasQueues(const ChannelRuntime &channel) const
+{
+    return std::any_of(channel.rewards.begin(), channel.rewards.end(),
+                       [](const RewardRuntime &reward) {
+                           return reward.queueMode !=
+                                  ChannelPointQueueMode::None;
+                       });
+}
+
+bool ChannelPointsController::isActive(const ChannelRuntime &channel) const
+{
+    if (channel.watchers > 0 || this->hasQueues(channel))
     {
-        ctx = requestIt.value();
-        this->pendingRequests_.erase(requestIt);
+        return true;
     }
-    if (!ctx.channelLogin.isEmpty())
+    return std::any_of(channel.rewards.begin(), channel.rewards.end(),
+                       [](const RewardRuntime &reward) {
+                           return reward.inFlight || reward.retryAfterReload;
+                       });
+}
+
+void ChannelPointsController::updateTopics()
+{
+    QSet<QString> topics;
+    if (!this->auth_->token().isEmpty())
     {
-        auto &channel = this->getOrCreateChannel(ctx.channelLogin);
-        channel.lastError = message.errorMessage.isEmpty()
-                                ? message.errorCode
-                                : message.errorMessage;
-        if (ctx.kind == RequestKind::GetChannelPoints)
+        bool anyActive = false;
+        for (const auto &channel : this->channels_)
         {
-            channel.loadingBalance = false;
-        }
-        else if (ctx.kind == RequestKind::GetRewards)
-        {
-            channel.loadingRewards = false;
-        }
-        else if (ctx.kind == RequestKind::Redeem)
-        {
-            if (auto *reward = this->findReward(ctx.channelLogin, ctx.rewardId))
+            if (!this->isActive(channel))
             {
-                reward->inFlight = false;
-                reward->inFlightTransactionId.clear();
-                reward->lastResult = channel.lastError;
+                continue;
+            }
+            anyActive = true;
+            if (!channel.channelId.isEmpty())
+            {
+                topics.insert("community-points-channel-v1." + channel.channelId);
             }
         }
-        this->emitChannelState(ctx.channelLogin);
-        return;
-    }
-
-    qCWarning(chatterinoWebsocket)
-        << "Channel points server error:" << message.errorCode
-        << message.errorMessage;
-}
-
-void ChannelPointsController::handleEvent(
-    const ChannelPointsClient::ParsedMessage &message)
-{
-    const auto channelLogin = message.channelLogin.trimmed().toLower();
-    if (channelLogin.isEmpty() || this->findChannel(channelLogin) == nullptr)
-    {
-        return;
-    }
-
-    const auto eventName = message.event;
-    if (eventName == "reward_updated")
-    {
-        this->requestSnapshots(channelLogin);
-    }
-    else if (eventName == "reward_redeemed")
-    {
-        const auto payload = message.root.value("payload").toObject();
-        if (this->shouldRefreshForRewardEvent(channelLogin, payload))
+        if (anyActive && !this->auth_->userId().isEmpty())
         {
-            this->requestSnapshots(channelLogin);
+            topics.insert("community-points-user-v1." + this->auth_->userId());
         }
     }
+    this->hermes_->setTopics(topics);
 }
 
-void ChannelPointsController::scheduleReconnect()
+void ChannelPointsController::updateTicking()
 {
-    if (this->reconnectTimer_.isActive())
+    if (this->stopping_)
     {
         return;
     }
 
-    auto delay = this->reconnectBackoff_.next();
-    this->reconnectTimer_.start(int(delay.count()));
+    const bool anyQueues =
+        std::any_of(this->channels_.begin(), this->channels_.end(),
+                    [this](const ChannelRuntime &channel) {
+                        return this->hasQueues(channel);
+                    });
+    if (anyQueues && !this->tickTimer_.isActive())
+    {
+        this->tickTimer_.start();
+    }
+    else if (!anyQueues)
+    {
+        this->tickTimer_.stop();
+    }
 }
 
-void ChannelPointsController::markAllDisconnected()
+void ChannelPointsController::emitChanged(const QString &login)
 {
-    for (auto it = this->channels_.begin(); it != this->channels_.end(); ++it)
+    Q_EMIT this->channelStateChanged(login);
+}
+
+ChannelPointResult ChannelPointsController::makeResult(
+    ChannelPointResult::Kind kind, const QString &text)
+{
+    return {
+        .kind = kind,
+        .text = text,
+        .at = QDateTime::currentDateTime(),
+    };
+}
+
+// ---------------------------------------------------------------------------
+// GQL
+
+void ChannelPointsController::postGql(
+    const QString &operation, const std::function<QJsonObject(bool)> &buildBody,
+    std::function<void(GqlResponse)> callback, bool inlineQuery)
+{
+    const auto token = this->auth_->token();
+    if (token.isEmpty())
     {
-        it->subscribed = false;
-        it->loadingBalance = false;
-        it->loadingRewards = false;
-        for (auto rewardIt = it->rewards.begin(); rewardIt != it->rewards.end();
-             ++rewardIt)
+        callback(GqlResponse{
+            .transportError = QStringLiteral("Not signed in"),
+        });
+        return;
+    }
+
+    auto handle = [this, operation, buildBody, callback,
+                   inlineQuery](const NetworkResult &result) {
+        GqlResponse response;
+        response.status = result.status();
+
+        if (!response.status)
         {
-            rewardIt->inFlight = false;
-            rewardIt->inFlightTransactionId.clear();
+            response.transportError = result.formatError();
+            callback(response);
+            return;
         }
-        this->emitChannelState(it.key());
-    }
+        if (*response.status == 401)
+        {
+            response.unauthorized = true;
+            response.transportError = QStringLiteral("Unauthorized");
+            callback(response);
+            return;
+        }
+        if (*response.status >= 500)
+        {
+            response.transportError = QStringLiteral("HTTP %1").arg(*response.status);
+            callback(response);
+            return;
+        }
+
+        response.root = result.parseJson();
+        if (response.root.isEmpty())
+        {
+            response.transportError = QStringLiteral("Invalid response (HTTP %1)")
+                                          .arg(*response.status);
+            logWarning(QStringLiteral("GQL %1: invalid response: %2")
+                           .arg(operation,
+                                QString::fromUtf8(result.getData().left(300))));
+            callback(response);
+            return;
+        }
+
+        const auto errors = inspectGqlErrors(response.root);
+        if (errors.persistedQueryNotFound && !inlineQuery)
+        {
+            logWarning(QStringLiteral("GQL %1: persisted query unknown, "
+                                      "retrying with the full query")
+                           .arg(operation));
+            this->postGql(operation, buildBody, callback, true);
+            return;
+        }
+        if (errors.hasErrors)
+        {
+            logWarning(QStringLiteral("GQL %1 returned errors: %2")
+                           .arg(operation, errors.message));
+        }
+        response.unauthorized = errors.unauthorized;
+        callback(response);
+    };
+
+    NetworkRequest(GQL_URL, NetworkRequestType::Post)
+        .header("Authorization", "OAuth " + token)
+        .header("Client-Id", WEB_CLIENT_ID)
+        .header("X-Device-Id", ChannelPointsAuth::deviceId())
+        .header("Client-Session-Id", this->sessionId_)
+        .header("User-Agent", USER_AGENT)
+        .json(buildBody(inlineQuery))
+        .timeout(GQL_TIMEOUT_MS)
+        .caller(this)
+        .onSuccess(handle)
+        .onError(handle)
+        .execute();
 }
 
-void ChannelPointsController::emitChannelState(const QString &channelLogin)
+void ChannelPointsController::loadChannel(const QString &login)
 {
-    Q_EMIT this->channelStateChanged(channelLogin);
-}
-
-void ChannelPointsController::tickQueue()
-{
-    if (!this->sessionReady_)
+    auto *channel = this->findChannel(login);
+    if (channel == nullptr || this->stopping_ ||
+        this->auth_->token().isEmpty())
     {
         return;
     }
 
-    for (auto channelIt = this->channels_.begin(); channelIt != this->channels_.end();
-         ++channelIt)
+    if (channel->loading)
     {
-        if (channelIt->visibleRefs <= 0 || !channelIt->subscribed)
+        channel->reloadQueued = true;
+        return;
+    }
+
+    channel->loading = true;
+    this->emitChanged(login);
+
+    this->postGql(
+        QStringLiteral("ChannelPointsContext"),
+        [login](bool inlineQuery) {
+            return buildContextRequest(login, inlineQuery);
+        },
+        [this, login](const GqlResponse &response) {
+            this->handleContextLoaded(login, response);
+        });
+}
+
+void ChannelPointsController::handleContextLoaded(const QString &login,
+                                                  const GqlResponse &response)
+{
+    auto *channel = this->findChannel(login);
+    if (channel == nullptr)
+    {
+        return;
+    }
+    channel->loading = false;
+
+    if (response.unauthorized)
+    {
+        channel->error = QStringLiteral("Twitch rejected the channel points "
+                                        "sign-in");
+        this->auth_->reportTokenRejected(QStringLiteral("ChannelPointsContext"));
+    }
+    else if (!response.transportError.isEmpty())
+    {
+        channel->error = QStringLiteral("Couldn't load rewards: %1")
+                             .arg(response.transportError);
+        logWarning(QStringLiteral("Loading #%1 failed: %2")
+                       .arg(login, response.transportError));
+    }
+    else
+    {
+        QString error;
+        auto context = parseContext(response.root, error);
+        if (!context)
+        {
+            channel->error = error;
+            logWarning(QStringLiteral("Loading #%1 failed: %2").arg(login, error));
+        }
+        else
+        {
+            channel->error.clear();
+            channel->loaded = true;
+            channel->lastLoadedAt = QDateTime::currentDateTimeUtc();
+            const bool idChanged = channel->channelId != context->channelId;
+            channel->channelId = context->channelId;
+            channel->displayName = context->displayName;
+            if (context->balance)
+            {
+                channel->balance = context->balance;
+            }
+
+            QSet<QString> seen;
+            QStringList order;
+            for (auto &reward : context->rewards)
+            {
+                const auto id = reward.id;
+                channel->rewards[id].reward = std::move(reward);
+                order.append(id);
+                seen.insert(id);
+            }
+            for (auto it = channel->rewards.begin();
+                 it != channel->rewards.end();)
+            {
+                if (seen.contains(it.key()))
+                {
+                    ++it;
+                    continue;
+                }
+                if (it->queueMode != ChannelPointQueueMode::None)
+                {
+                    logWarning(QStringLiteral("Queue dropped: #%1 \"%2\" no "
+                                              "longer exists")
+                                   .arg(login, it->reward.title));
+                }
+                it = channel->rewards.erase(it);
+            }
+            channel->order = order;
+
+            for (auto &reward : channel->rewards)
+            {
+                if (reward.retryAfterReload)
+                {
+                    auto attempt = *reward.retryAfterReload;
+                    reward.retryAfterReload.reset();
+                    // The reward changed. A fresh ID keeps this from being
+                    // mistaken for the failed attempt.
+                    attempt.transactionId = generateTransactionId();
+                    attempt.sameTransactionRetries = 0;
+                    this->startAttempt(*channel, reward, attempt);
+                    continue;
+                }
+                if (reward.queueMode != ChannelPointQueueMode::None &&
+                    reward.reward.cost != reward.queuedCost)
+                {
+                    this->stopQueue(reward,
+                                    QStringLiteral("cost changed from %1 to %2")
+                                        .arg(reward.queuedCost)
+                                        .arg(reward.reward.cost));
+                }
+            }
+
+            if (idChanged)
+            {
+                this->updateTopics();
+            }
+        }
+    }
+
+    if (!channel->loaded || !channel->error.isEmpty())
+    {
+        // Attempts waiting for this reload can't continue.
+        for (auto &reward : channel->rewards)
+        {
+            if (reward.retryAfterReload)
+            {
+                auto attempt = *reward.retryAfterReload;
+                reward.retryAfterReload.reset();
+                this->handleRedeemFailure(
+                    *channel, reward, attempt,
+                    QStringLiteral("Reward changed, and reloading it failed"),
+                    true);
+            }
+        }
+    }
+
+    if (channel->reloadQueued)
+    {
+        channel->reloadQueued = false;
+        this->loadChannel(login);
+    }
+    else
+    {
+        this->tryQueued(*channel);
+    }
+    this->updateTicking();
+    this->emitChanged(login);
+}
+
+void ChannelPointsController::scheduleReload(const QString &login, int delayMs)
+{
+    auto *&timer = this->reloadTimers_[login];
+    if (timer == nullptr)
+    {
+        timer = new QTimer(this);
+        timer->setSingleShot(true);
+        QObject::connect(timer, &QTimer::timeout, this, [this, login] {
+            this->loadChannel(login);
+        });
+    }
+    timer->start(delayMs);
+}
+
+// ---------------------------------------------------------------------------
+// Queue & redeeming
+
+void ChannelPointsController::tick()
+{
+    const auto now = QDateTime::currentDateTimeUtc();
+    const auto maxAge = this->hermes_->isConnected()
+                            ? MAX_QUEUE_DATA_AGE_MS
+                            : MAX_QUEUE_DATA_AGE_DISCONNECTED_MS;
+
+    // Collect first, loading/attempting may modify channels_.
+    QStringList logins;
+    for (const auto &channel : this->channels_)
+    {
+        if (this->hasQueues(channel))
+        {
+            logins.append(channel.login);
+        }
+    }
+
+    for (const auto &login : logins)
+    {
+        auto *channel = this->findChannel(login);
+        if (channel == nullptr)
         {
             continue;
         }
 
-        for (const auto &rewardId : channelIt->rewardOrder)
+        // Live updates can be missed; make sure queued rewards don't wait on
+        // stale data forever.
+        if (!channel->loading &&
+            (!channel->lastLoadedAt.isValid() ||
+             channel->lastLoadedAt.msecsTo(now) > maxAge))
         {
-            auto rewardIt = channelIt->rewards.find(rewardId);
-            if (rewardIt == channelIt->rewards.end())
-            {
-                continue;
-            }
+            this->loadChannel(login);
+            continue;
+        }
 
-            if (rewardIt->queueMode == ChannelPointQueueMode::None)
-            {
-                continue;
-            }
+        this->tryQueued(*channel);
+    }
+}
 
-            this->tryRedeem(channelIt.key(), rewardIt.value(), false);
+void ChannelPointsController::tryQueued(ChannelRuntime &channel)
+{
+    if (this->stopping_ || this->auth_->token().isEmpty() || !channel.loaded ||
+        channel.loading || channel.channelId.isEmpty())
+    {
+        return;
+    }
+
+    const auto now = QDateTime::currentDateTimeUtc();
+    for (const auto &rewardId : channel.order)
+    {
+        auto it = channel.rewards.find(rewardId);
+        if (it == channel.rewards.end())
+        {
+            continue;
+        }
+
+        auto &reward = it.value();
+        if (reward.queueMode == ChannelPointQueueMode::None ||
+            reward.inFlight || reward.retryAfterReload)
+        {
+            continue;
+        }
+        if (reward.nextAttemptAt.isValid() && now < reward.nextAttemptAt)
+        {
+            continue;
+        }
+        if (evaluateReward(reward.reward, channel.balance, now) !=
+            RewardBlock::None)
+        {
+            continue;
+        }
+
+        this->startAttempt(channel, reward,
+                           Attempt{
+                               .transactionId = generateTransactionId(),
+                               .textInput = reward.queuedInput,
+                               .confirmedCost = reward.queuedCost,
+                               .manual = false,
+                           });
+    }
+}
+
+void ChannelPointsController::startAttempt(ChannelRuntime &channel,
+                                           RewardRuntime &reward,
+                                           Attempt attempt)
+{
+    if (reward.reward.cost != attempt.confirmedCost)
+    {
+        // Never spend a different amount than the user agreed to.
+        this->handleRedeemFailure(
+            channel, reward, attempt,
+            QStringLiteral("Cost changed from %1 to %2, not redeemed")
+                .arg(attempt.confirmedCost)
+                .arg(reward.reward.cost),
+            false);
+        return;
+    }
+
+    reward.inFlight = attempt;
+    reward.lastResult = makeResult(ChannelPointResult::Kind::Info,
+                                   attempt.sameTransactionRetries > 0
+                                       ? QStringLiteral("Retrying…")
+                                       : QStringLiteral("Redeeming…"));
+
+    logInfo(QStringLiteral("Redeem attempt: #%1 \"%2\" cost=%3 balance=%4 "
+                           "mode=%5 input=%6 chars tx=%7%8")
+                .arg(channel.login, reward.reward.title)
+                .arg(attempt.confirmedCost)
+                .arg(channel.balance ? QString::number(*channel.balance)
+                                     : QStringLiteral("?"))
+                .arg(attempt.manual ? QStringLiteral("manual")
+                                    : modeName(reward.queueMode))
+                .arg(attempt.textInput.size())
+                .arg(attempt.transactionId,
+                     attempt.sameTransactionRetries > 0
+                         ? QStringLiteral(" (retry %1, same tx)")
+                               .arg(attempt.sameTransactionRetries)
+                         : QString()));
+
+    const auto login = channel.login;
+    const auto rewardId = reward.reward.id;
+    const auto channelId = channel.channelId;
+    const auto rewardData = reward.reward;
+
+    this->postGql(
+        QStringLiteral("RedeemCustomReward"),
+        [channelId, rewardData, attempt](bool inlineQuery) {
+            return buildRedeemRequest(channelId, rewardData, attempt.textInput,
+                                      attempt.transactionId, inlineQuery);
+        },
+        [this, login, rewardId, attempt](const GqlResponse &response) {
+            this->handleRedeemResponse(login, rewardId, attempt, response);
+        });
+
+    this->updateTopics();
+    this->emitChanged(login);
+}
+
+void ChannelPointsController::handleRedeemResponse(const QString &login,
+                                                   const QString &rewardId,
+                                                   Attempt attempt,
+                                                   const GqlResponse &response)
+{
+    auto *channel = this->findChannel(login);
+    if (channel == nullptr)
+    {
+        return;
+    }
+    auto it = channel->rewards.find(rewardId);
+    if (it == channel->rewards.end())
+    {
+        logWarning(QStringLiteral("Redeem response for a reward that no longer "
+                                  "exists (#%1, tx=%2)")
+                       .arg(login, attempt.transactionId));
+        return;
+    }
+
+    auto &reward = it.value();
+    reward.inFlight.reset();
+
+    if (response.unauthorized)
+    {
+        this->handleRedeemFailure(*channel, reward, attempt,
+                                  QStringLiteral("Twitch rejected the channel "
+                                                 "points sign-in"),
+                                  true);
+        this->auth_->reportTokenRejected(QStringLiteral("RedeemCustomReward"));
+        return;
+    }
+
+    if (!response.transportError.isEmpty())
+    {
+        // We don't know whether Twitch processed it. Retrying with the same
+        // transaction ID lets Twitch tell us without redeeming twice.
+        if (attempt.sameTransactionRetries < MAX_SAME_TRANSACTION_RETRIES)
+        {
+            attempt.sameTransactionRetries++;
+            logWarning(QStringLiteral("Redeem #%1 \"%2\": no answer (%3), "
+                                      "retrying with the same tx=%4")
+                           .arg(login, reward.reward.title,
+                                response.transportError, attempt.transactionId));
+            reward.inFlight = attempt;
+            reward.lastResult = makeResult(ChannelPointResult::Kind::Info,
+                                           QStringLiteral("No answer, retrying…"));
+            this->retryLater(login, rewardId, attempt,
+                             2000 * attempt.sameTransactionRetries);
+            this->emitChanged(login);
+            return;
+        }
+
+        this->handleRedeemFailure(
+            *channel, reward, attempt,
+            QStringLiteral("No answer from Twitch (%1). It may or may not "
+                           "have gone through.")
+                .arg(response.transportError),
+            true);
+        this->scheduleReload(login, 1000);
+        return;
+    }
+
+    QString parseError;
+    auto result = parseRedeemResponse(response.root, parseError);
+    if (!result)
+    {
+        logWarning(QStringLiteral("Redeem #%1 \"%2\": unexpected response: %3")
+                       .arg(login, reward.reward.title, parseError));
+        this->handleRedeemFailure(*channel, reward, attempt, parseError, true);
+        return;
+    }
+
+    if (result->ok)
+    {
+        this->handleRedeemSuccess(*channel, reward, attempt, {});
+        return;
+    }
+
+    const auto outcome = classifyRedeemError(
+        result->errorCode, attempt.sameTransactionRetries > 0);
+    logInfo(QStringLiteral("Redeem #%1 \"%2\" returned %3 %4 (tx=%5)")
+                .arg(login, reward.reward.title, result->errorCode,
+                     result->errorMessage, attempt.transactionId));
+    const auto description = describeRedeemError(result->errorCode);
+
+    switch (outcome)
+    {
+        case RedeemOutcome::Success:
+            this->handleRedeemSuccess(
+                *channel, reward, attempt,
+                QStringLiteral("confirmed by %1").arg(result->errorCode));
+            return;
+
+        case RedeemOutcome::NewTransactionAndRetry:
+            if (!attempt.regeneratedTransaction)
+            {
+                attempt.regeneratedTransaction = true;
+                attempt.transactionId = generateTransactionId();
+                attempt.sameTransactionRetries = 0;
+                this->startAttempt(*channel, reward, attempt);
+                return;
+            }
+            break;
+
+        case RedeemOutcome::RetrySameTransaction:
+            if (attempt.sameTransactionRetries < MAX_SAME_TRANSACTION_RETRIES)
+            {
+                attempt.sameTransactionRetries++;
+                reward.inFlight = attempt;
+                this->retryLater(login, rewardId, attempt, 2000);
+                this->emitChanged(login);
+                return;
+            }
+            break;
+
+        case RedeemOutcome::RefreshAndRetry:
+            if (!attempt.refreshedOnce)
+            {
+                attempt.refreshedOnce = true;
+                reward.retryAfterReload = attempt;
+                reward.lastResult = makeResult(
+                    ChannelPointResult::Kind::Info,
+                    QStringLiteral("Reward changed, reloading…"));
+                this->loadChannel(login);
+                this->emitChanged(login);
+                return;
+            }
+            break;
+
+        case RedeemOutcome::Wait:
+            if (result->errorCode == "MAX_PER_USER_PER_STREAM" &&
+                reward.reward.maxPerUserPerStream > 0)
+            {
+                reward.reward.userRedemptionsThisStream =
+                    std::max(reward.reward.userRedemptionsThisStream,
+                             reward.reward.maxPerUserPerStream);
+            }
+            this->handleRedeemFailure(*channel, reward, attempt, description,
+                                      true);
+            this->scheduleReload(login, 1500);
+            return;
+
+        case RedeemOutcome::Stop:
+            this->handleRedeemFailure(
+                *channel, reward, attempt,
+                QStringLiteral("%1 (%2)").arg(description, result->errorCode),
+                false);
+            return;
+    }
+
+    // Retries exhausted.
+    this->handleRedeemFailure(*channel, reward, attempt, description, true);
+}
+
+void ChannelPointsController::retryLater(const QString &login,
+                                         const QString &rewardId,
+                                         Attempt attempt, int delayMs)
+{
+    QTimer::singleShot(delayMs, this, [this, login, rewardId, attempt] {
+        auto *channel = this->findChannel(login);
+        if (channel == nullptr)
+        {
+            return;
+        }
+        auto it = channel->rewards.find(rewardId);
+        if (it == channel->rewards.end() || !it->inFlight ||
+            it->inFlight->transactionId != attempt.transactionId)
+        {
+            return;
+        }
+        it->inFlight.reset();
+        this->startAttempt(*channel, it.value(), attempt);
+    });
+}
+
+void ChannelPointsController::handleRedeemSuccess(ChannelRuntime &channel,
+                                                  RewardRuntime &reward,
+                                                  const Attempt &attempt,
+                                                  const QString &note)
+{
+    logInfo(QStringLiteral("Redeemed #%1 \"%2\" for %3 (tx=%4)%5")
+                .arg(channel.login, reward.reward.title)
+                .arg(attempt.confirmedCost)
+                .arg(attempt.transactionId,
+                     note.isEmpty() ? QString() : QStringLiteral(", ") + note));
+
+    reward.consecutiveFailures = 0;
+    reward.lastResult =
+        makeResult(ChannelPointResult::Kind::Success, QStringLiteral("Redeemed"));
+
+    // Live updates correct these shortly; update now so the UI and the queue
+    // don't act on stale numbers in the meantime.
+    if (channel.balance)
+    {
+        channel.balance = std::max(0, *channel.balance - attempt.confirmedCost);
+    }
+    if (reward.reward.userRedemptionsThisStream >= 0)
+    {
+        reward.reward.userRedemptionsThisStream++;
+    }
+
+    if (!attempt.manual)
+    {
+        if (reward.queueMode == ChannelPointQueueMode::Once)
+        {
+            reward.queueMode = ChannelPointQueueMode::None;
+            reward.queuedInput.clear();
+        }
+        else if (reward.queueMode == ChannelPointQueueMode::Repeat)
+        {
+            reward.nextAttemptAt =
+                QDateTime::currentDateTimeUtc().addMSecs(REPEAT_GAP_MS);
         }
     }
+
+    getApp()->getSound()->play(successSoundUrl());
+
+    this->scheduleReload(channel.login, 1500);
+    this->updateTicking();
+    this->updateTopics();
+    this->emitChanged(channel.login);
 }
 
-bool ChannelPointsController::tryRedeem(const QString &channelLogin,
-                                        RewardRuntime &reward, bool manual,
-                                        const QString &manualInput)
+void ChannelPointsController::handleRedeemFailure(ChannelRuntime &channel,
+                                                  RewardRuntime &reward,
+                                                  const Attempt &attempt,
+                                                  const QString &message,
+                                                  bool keepQueue)
 {
-    auto *channel = this->findChannel(channelLogin);
-    if (!channel || reward.inFlight)
+    logWarning(QStringLiteral("Redeem failed: #%1 \"%2\": %3 (tx=%4)")
+                   .arg(channel.login, reward.reward.title, message,
+                        attempt.transactionId));
+
+    reward.lastResult = makeResult(ChannelPointResult::Kind::Error, message);
+
+    if (!attempt.manual && reward.queueMode != ChannelPointQueueMode::None)
     {
-        return false;
-    }
-
-    const auto now = QDateTime::currentMSecsSinceEpoch();
-    if (!manual && (now - reward.lastAttemptAt) < MIN_REDEEM_INTERVAL_MS)
-    {
-        return false;
-    }
-
-    if (!this->canAttemptRedeem(*channel, reward))
-    {
-        return false;
-    }
-
-    reward.inFlight = true;
-    reward.lastAttemptAt = now;
-    reward.lastResult = "Sending";
-    reward.inFlightTransactionId = this->nextTransactionId();
-    const auto redeemInput = manual ? manualInput : reward.queuedInput;
-
-    auto requestId = this->nextRequestId();
-    this->pendingRequests_.insert(
-        requestId,
-        RequestContext{
-            .kind = RequestKind::Redeem,
-            .channelLogin = channelLogin,
-            .rewardId = reward.reward.id,
-            .transactionId = reward.inFlightTransactionId,
-        });
-    this->socket_.sendText(ChannelPointsClient::buildRedeemRequest(
-        requestId, channelLogin, reward.reward, redeemInput,
-        reward.inFlightTransactionId));
-    this->emitChannelState(channelLogin);
-    return true;
-}
-
-bool ChannelPointsController::canAttemptRedeem(const ChannelRuntime &channel,
-                                               const RewardRuntime &reward) const
-{
-    if (!this->transportConnected_ || !this->sessionReady_ || !channel.subscribed)
-    {
-        return false;
-    }
-
-    if (!reward.reward.isRedeemable || !reward.reward.isEnabled ||
-        reward.reward.isPaused || !rewardIsCurrentlyInStock(reward.reward))
-    {
-        return false;
-    }
-
-    if (rewardHasCooldown(reward.reward))
-    {
-        return false;
-    }
-
-    if (channel.hasBalance && channel.balance < reward.reward.cost)
-    {
-        return false;
-    }
-
-    if (reward.reward.isUserInputRequired &&
-        reward.queueMode != ChannelPointQueueMode::None &&
-        reward.queuedInput.trimmed().isEmpty())
-    {
-        return false;
-    }
-
-    return true;
-}
-
-void ChannelPointsController::updateRewardSnapshot(
-    ChannelRuntime &channel, const QVector<ChannelPointRewardData> &rewards)
-{
-    QSet<QString> seen;
-    channel.rewardOrder.clear();
-
-    for (const auto &rewardData : rewards)
-    {
-        auto &reward = channel.rewards[rewardData.id];
-        reward.reward = rewardData;
-        channel.rewardOrder.push_back(rewardData.id);
-        seen.insert(rewardData.id);
-    }
-
-    for (auto it = channel.rewards.begin(); it != channel.rewards.end();)
-    {
-        if (!seen.contains(it.key()))
+        if (keepQueue)
         {
-            it = channel.rewards.erase(it);
+            reward.consecutiveFailures++;
+            reward.nextAttemptAt = QDateTime::currentDateTimeUtc().addMSecs(
+                waitBackoffMs(reward.consecutiveFailures));
         }
         else
         {
-            ++it;
+            this->stopQueue(reward, message);
         }
     }
+
+    this->updateTicking();
+    this->updateTopics();
+    this->emitChanged(channel.login);
 }
 
-QStringList ChannelPointsController::desiredSubscriptions() const
+void ChannelPointsController::stopQueue(RewardRuntime &reward,
+                                        const QString &reason)
 {
-    QStringList desired;
-    for (auto it = this->channels_.begin(); it != this->channels_.end(); ++it)
+    logWarning(QStringLiteral("Queue stopped: \"%1\": %2")
+                   .arg(reward.reward.title, reason));
+    reward.queueMode = ChannelPointQueueMode::None;
+    reward.queuedInput.clear();
+    reward.lastResult = makeResult(ChannelPointResult::Kind::Error,
+                                   QStringLiteral("Queue stopped: %1").arg(reason));
+}
+
+void ChannelPointsController::cancelAllQueuesInternal(const QString &reason)
+{
+    for (auto &channel : this->channels_)
     {
-        if (it->visibleRefs > 0)
+        for (auto &reward : channel.rewards)
         {
-            desired.push_back(it.key());
+            if (reward.queueMode != ChannelPointQueueMode::None)
+            {
+                this->stopQueue(reward, reason);
+            }
         }
     }
-    desired.sort();
-    return desired;
-}
-
-int ChannelPointsController::queuedRewardCount(const ChannelRuntime &channel) const
-{
-    int count = 0;
-    for (auto it = channel.rewards.begin(); it != channel.rewards.end(); ++it)
-    {
-        if (it->queueMode != ChannelPointQueueMode::None)
-        {
-            count++;
-        }
-    }
-    return count;
-}
-
-bool ChannelPointsController::shouldRefreshForRewardEvent(
-    const QString &channelLogin, const QJsonObject &payload) const
-{
-    const auto data = payload.value("data").toObject();
-    const auto redemption = data.value("redemption").toObject();
-    const auto rewardObject = redemption.value("reward").toObject();
-    const auto rewardId = rewardObject.value("id").toString();
-    if (rewardId.isEmpty())
-    {
-        return false;
-    }
-
-    const auto *reward = this->findReward(channelLogin, rewardId);
-    if (reward == nullptr)
-    {
-        return false;
-    }
-
-    return reward->reward.isGloballyLimited;
-}
-
-QString ChannelPointsController::buildRewardStatus(const ChannelRuntime &channel,
-                                                   const RewardRuntime &reward)
-{
-    if (reward.inFlight)
-    {
-        return reward.lastResult.isEmpty() ? "Sending" : reward.lastResult;
-    }
-
-    if (!reward.lastResult.isEmpty() &&
-        reward.queueMode == ChannelPointQueueMode::None &&
-        reward.lastResult != "Inactive")
-    {
-        return reward.lastResult;
-    }
-
-    if (reward.queueMode == ChannelPointQueueMode::Once)
-    {
-        return "Once";
-    }
-
-    if (reward.queueMode == ChannelPointQueueMode::Repeat)
-    {
-        return "Loop";
-    }
-
-    if (!reward.reward.isRedeemable)
-    {
-        return "N/A";
-    }
-
-    if (!reward.reward.isEnabled)
-    {
-        return "Off";
-    }
-
-    if (reward.reward.isPaused)
-    {
-        return "Paused";
-    }
-
-    const auto cooldownAt = rewardCooldownAt(reward.reward);
-    if (cooldownAt.isValid() && cooldownAt > QDateTime::currentDateTimeUtc())
-    {
-        return QString("CD %1").arg(
-            cooldownAt.toLocalTime().toString("mm:ss"));
-    }
-
-    if (!rewardIsCurrentlyInStock(reward.reward))
-    {
-        return "OOS";
-    }
-
-    if (channel.hasBalance && channel.balance < reward.reward.cost)
-    {
-        return QString("Need %1")
-            .arg(reward.reward.cost - channel.balance);
-    }
-
-    return "Ready";
-}
-
-bool ChannelPointsController::rewardHasCooldown(
-    const ChannelPointRewardData &reward)
-{
-    const auto cooldownAt = rewardCooldownAt(reward);
-    return cooldownAt.isValid() &&
-           cooldownAt > QDateTime::currentDateTimeUtc();
-}
-
-bool ChannelPointsController::rewardIsCurrentlyInStock(
-    const ChannelPointRewardData &reward)
-{
-    if (reward.isInStock)
-    {
-        return true;
-    }
-
-    if (reward.hasGlobalCooldown)
-    {
-        const auto cooldownAt = rewardCooldownAt(reward);
-        if (cooldownAt.isValid() &&
-            cooldownAt <= QDateTime::currentDateTimeUtc())
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-QDateTime ChannelPointsController::rewardCooldownAt(
-    const ChannelPointRewardData &reward)
-{
-    if (reward.cooldownExpiresAt.isEmpty())
-    {
-        return {};
-    }
-
-    auto dateTime = QDateTime::fromString(reward.cooldownExpiresAt, ISO_DATE);
-    if (dateTime.isValid() && dateTime.timeSpec() == Qt::LocalTime)
-    {
-        dateTime = dateTime.toUTC();
-    }
-    return dateTime;
-}
-
-QUrl ChannelPointsController::successSoundUrl()
-{
-    const auto customPath = getSettings()->pathHighlightSound.getValue();
-    if (!customPath.isEmpty())
-    {
-        return QUrl::fromLocalFile(customPath);
-    }
-
-    return QUrl("qrc:/sounds/ping2.wav");
+    this->updateTicking();
 }
 
 }  // namespace chatterino
