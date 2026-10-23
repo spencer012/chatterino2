@@ -30,8 +30,8 @@
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
-#include "widgets/helper/CommonTexts.hpp"
 #include "widgets/helper/ChannelView.hpp"
+#include "widgets/helper/CommonTexts.hpp"
 #include "widgets/Label.hpp"
 #include "widgets/splits/PinnedMessageWidget.hpp"
 #include "widgets/splits/Split.hpp"
@@ -543,6 +543,13 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
             }
         });
         history->addSeparator();
+        auto *deduplicate =
+            history->addAction("Deduplicate repeated message content");
+        deduplicate->setCheckable(true);
+        deduplicate->setChecked(getSettings()->deduplicateMessageContent);
+        connect(deduplicate, &QAction::toggled, this, [](bool enabled) {
+            getSettings()->deduplicateMessageContent = enabled;
+        });
         auto *logging =
             history->addAction("Log cache performance every 30 seconds");
         logging->setCheckable(true);

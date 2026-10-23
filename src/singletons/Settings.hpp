@@ -701,6 +701,8 @@ public:
         "/misc/scrollback/channelOverrides", "{}"};
     BoolSetting cachePerformanceLogging = {
         "/misc/scrollback/performanceLogging", false};
+    BoolSetting deduplicateMessageContent = {
+        "/misc/scrollback/deduplicateContent", true};
 
     /// A missing override follows the default. Zero removes an override.
     std::optional<int> channelScrollbackOverride(const QString &channel) const;

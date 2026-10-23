@@ -391,6 +391,8 @@ set(SOURCE_FILES
         messages/Link.hpp
         messages/Message.cpp
         messages/Message.hpp
+        messages/MessageContentPool.cpp
+        messages/MessageContentPool.hpp
         messages/MessageBuilder.cpp
         messages/MessageBuilder.hpp
         messages/MessageColor.cpp

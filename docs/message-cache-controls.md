@@ -68,3 +68,48 @@ paused snapshot still took 44.62 ms. Those timings include snapshot destruction,
 use synthetic payloads, and ran while the application was compiling. They show
 which operation was removed from normal rendering, rather than a measured frame
 rate improvement.
+
+## Content deduplication
+
+**Deduplicate repeated message content** is enabled by default and can be changed
+in the channel history menu or Settings > General. It shares equal message text
+and parsed text word lists. Emote-bearing messages participate, including their
+surrounding text and text fallbacks. Each emote element, message ID, sender,
+timestamp, moderation state, link and layout remains independent. Parsing still
+runs for every occurrence.
+
+The pool has an 8,192-entry lookup index and a 64 KiB admission filter. The first
+sighting records a fingerprint, the second can create an entry, and subsequent
+matches can share it. Full equality checks follow hashing. Unique content avoids
+per-payload entries. Evicting an indexed entry leaves existing messages valid;
+its bookkeeping is freed when its last participant dies. Turning the feature off
+stops new sharing and clears the index. Already shared history remains valid.
+
+Cache diagnostics adds all-channel content statistics:
+
+- **Estimated CURRENT net saving** subtracts pool bookkeeping, the admission
+  filter and the extra tracking field in every message and text element. Negative
+  values are possible, especially with unique content or short histories.
+- **Current gross payload saving** counts retained duplicate storage
+  conservatively. Clones and copies already sharing Qt storage add no savings.
+- Cumulative duplicate bytes released and pool lookup wall time describe work
+  over the process lifetime. They are not current memory savings or CPU time.
+
+Byte figures use capacities and a fixed allocation model. They are not heap or
+process RAM measurements. Turning the feature off keeps the eight-byte tracking
+fields in existing object types. Reverting the separate deduplication commit also
+removes those fields. An on/off comparison should use fresh processes with the
+same retained chat to avoid counting older shared history.
+
+## Production-pool log replay
+
+`benchmarks/message-content-probe.cpp` replays the last 30 daily log files through
+the production pool. Use a fresh process for each enabled/disabled run and retain
+the same number of messages. Its arguments are `CHANNEL_LOG_DIRECTORY CHANNEL
+CAPACITY on|off`.
+
+This probe treats every body as plain text. It does not resolve native emotes or
+build real message envelopes, search text, layouts or GUI views. It checks pool
+costs and lifetime on repetition patterns, but its word-list savings cannot
+predict the application's emote-heavy workload. The live diagnostics use the
+actual parsed messages. Reports and log-derived replay results are local-only.

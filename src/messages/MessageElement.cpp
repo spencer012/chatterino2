@@ -109,6 +109,11 @@ void MessageElement::addFlags(MessageElementFlags flags)
     this->flags_.set(flags);
 }
 
+std::size_t MessageElement::shareContent(MessageContentPool & /*pool*/)
+{
+    return 0;
+}
+
 void MessageElement::cloneFrom(const MessageElement &source)
 {
     this->link_ = source.link_;
@@ -310,6 +315,7 @@ void EmoteElement::ensureText(bool asFallback)
     }
     this->textElement_ = std::make_unique<TextElement>(
         this->emote_->getCopyString(), MessageElementFlag::Misc, color);
+    this->textElement_->shareContent(MessageContentPool::global());
     this->usingFallbackColor_ = asFallback;
 }
 
@@ -537,6 +543,15 @@ QJsonObject LayeredEmoteElement::toJson() const
 std::string_view LayeredEmoteElement::type() const
 {
     return std::remove_pointer_t<decltype(this)>::TYPE;
+}
+
+std::size_t LayeredEmoteElement::shareContent(MessageContentPool &pool)
+{
+    if (!this->textElement_)
+    {
+        return 0;
+    }
+    return this->textElement_->shareContent(pool);
 }
 
 std::unique_ptr<MessageElement> LayeredEmoteElement::clone() const
@@ -930,6 +945,7 @@ FontStyle TextElement::fontStyle() const noexcept
 
 void TextElement::appendText(QStringView text)
 {
+    this->wordsContent_.reset();
     for (auto word : text.tokenize(u' '))
     {
         this->words_.append(word.toString());
@@ -938,6 +954,7 @@ void TextElement::appendText(QStringView text)
 
 void TextElement::appendText(const QString &text)
 {
+    this->wordsContent_.reset();
     qsizetype firstSpace = text.indexOf(u' ');
     if (firstSpace == -1)
     {
@@ -975,7 +992,13 @@ std::unique_ptr<MessageElement> TextElement::clone() const
         this->color_, this->style_);
 
     elem->cloneFrom(*this);
+    elem->wordsContent_ = this->wordsContent_;
     return elem;
+}
+
+std::size_t TextElement::shareContent(MessageContentPool &pool)
+{
+    return pool.shareWords(this->words_, this->wordsContent_) ? 1 : 0;
 }
 
 SingleLineTextElement::SingleLineTextElement(const QString &text,
@@ -1193,6 +1216,11 @@ std::string_view LinkElement::type() const
     return std::remove_pointer_t<decltype(this)>::TYPE;
 }
 
+std::size_t LinkElement::shareContent(MessageContentPool & /*pool*/)
+{
+    return 0;
+}
+
 std::unique_ptr<MessageElement> LinkElement::clone() const
 {
     auto elem = std::make_unique<LinkElement>(
@@ -1314,6 +1342,7 @@ std::unique_ptr<MessageElement> MentionElement::clone() const
     elem->setTooltip(this->getTooltip());
     elem->setTrailingSpace(this->hasTrailingSpace());
     elem->exhaustiveFlags = this->exhaustiveFlags;
+    elem->wordsContent_ = this->wordsContent_;
     return elem;
 }
 
@@ -1360,6 +1389,7 @@ void TimestampElement::addToContainer(MessageLayoutContainer &container,
         {
             this->format_ = getSettings()->timestampFormat.getValue();
             this->element_.reset(this->formatTime(this->time_));
+            this->element_->shareContent(MessageContentPool::global());
         }
 
         this->element_->addToContainer(container, ctx);
