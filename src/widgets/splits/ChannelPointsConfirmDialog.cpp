@@ -4,13 +4,16 @@
 
 #include "widgets/splits/ChannelPointsConfirmDialog.hpp"
 
-#include "util/LayoutCreator.hpp"
+#include "widgets/splits/ChannelPointsFormat.hpp"
 
 #include <QApplication>
+#include <QButtonGroup>
 #include <QDialogButtonBox>
+#include <QFrame>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSyntaxHighlighter>
 #include <QTextBlock>
 #include <QTextCharFormat>
@@ -21,6 +24,10 @@ namespace {
 
 constexpr int REDEEM_INPUT_SOFT_LIMIT = 500;
 
+const QColor WARNING_COLOR("#e0b84f");
+const QColor ERROR_COLOR("#e5675f");
+
+/// Highlights text past Twitch's soft limit instead of cutting it off.
 class RedeemInputHighlighter final : public QSyntaxHighlighter
 {
 public:
@@ -28,24 +35,23 @@ public:
         : QSyntaxHighlighter(document)
     {
         this->overLimitFormat_.setForeground(QColor("#fff59d"));
+        this->overLimitFormat_.setBackground(QColor(160, 120, 0, 70));
     }
 
 protected:
     void highlightBlock(const QString &text) override
     {
         const auto blockStart = this->currentBlock().position();
-        const auto overLimitStart =
-            std::max(0, REDEEM_INPUT_SOFT_LIMIT - blockStart);
-
         if (blockStart >= REDEEM_INPUT_SOFT_LIMIT)
         {
-            this->setFormat(0, text.size(), this->overLimitFormat_);
+            this->setFormat(0, int(text.size()), this->overLimitFormat_);
             return;
         }
 
+        const auto overLimitStart = REDEEM_INPUT_SOFT_LIMIT - blockStart;
         if (overLimitStart < text.size())
         {
-            this->setFormat(overLimitStart, text.size() - overLimitStart,
+            this->setFormat(overLimitStart, int(text.size()) - overLimitStart,
                             this->overLimitFormat_);
         }
     }
@@ -54,13 +60,24 @@ private:
     QTextCharFormat overLimitFormat_;
 };
 
+QString colorCss(const QColor &color)
+{
+    return QStringLiteral("rgba(%1, %2, %3, %4)")
+        .arg(color.red())
+        .arg(color.green())
+        .arg(color.blue())
+        .arg(color.alpha());
+}
+
 }  // namespace
 
 namespace chatterino {
 
+namespace fmt = channelpoints::format;
+
 ChannelPointsConfirmDialog::ChannelPointsConfirmDialog(
-    const QString &channelLogin, const ChannelPointRewardData &reward,
-    ChannelPointQueueMode action, QWidget *parent)
+    const QString &channelName, const ChannelPointRewardView &view,
+    std::optional<int> balance, ChannelPointQueueMode mode, QWidget *parent)
     : BasePopup(
           {
               BaseWindow::DisableLayoutSave,
@@ -68,171 +85,355 @@ ChannelPointsConfirmDialog::ChannelPointsConfirmDialog(
               BaseWindow::Dialog,
           },
           parent)
-    , action_(action)
-    , requiresInput_(reward.isUserInputRequired)
+    , view_(view)
+    , balance_(balance)
 {
     this->setAttribute(Qt::WA_DeleteOnClose);
-    const auto channel = channelLogin.trimmed().toLower();
-    const auto actionText = [action] {
-        switch (action)
-        {
-            case ChannelPointQueueMode::Once:
-                return QString("Queue Once");
-            case ChannelPointQueueMode::Repeat:
-                return QString("Start Loop");
-            case ChannelPointQueueMode::None:
-            default:
-                return QString("Redeem");
-        }
-    }();
-    this->setWindowTitle(QString("%1 in #%2").arg(actionText, channel));
+    this->setWindowTitle(QStringLiteral("Redeem in %1").arg(channelName));
 
-    auto layout = LayoutCreator<QWidget>(this->getLayoutContainer())
-                      .setLayoutType<QVBoxLayout>();
-    layout->setContentsMargins(12, 12, 12, 12);
-    layout->setSpacing(8);
+    auto *layout = new QVBoxLayout(this->getLayoutContainer());
+    layout->setContentsMargins(16, 14, 16, 12);
+    layout->setSpacing(6);
 
-    auto *titleLabel = layout.emplace<QLabel>(QString("<b>%1</b>").arg(reward.title))
-                           .getElement();
-    titleLabel->setTextFormat(Qt::RichText);
-    titleLabel->setWordWrap(true);
+    const auto text = this->palette().color(QPalette::WindowText);
+    auto dim = text;
+    dim.setAlpha(160);
 
-    layout.emplace<QLabel>(QString("Cost: %1").arg(reward.cost));
+    // What: title, where and how much.
+    this->titleLabel_ = new QLabel(this);
+    this->titleLabel_->setTextFormat(Qt::PlainText);
+    this->titleLabel_->setWordWrap(true);
+    auto titleFont = this->titleLabel_->font();
+    titleFont.setBold(true);
+    titleFont.setPointSizeF(titleFont.pointSizeF() * 1.2);
+    this->titleLabel_->setFont(titleFont);
+    layout->addWidget(this->titleLabel_);
 
-    auto prompt = reward.prompt.trimmed();
-    if (prompt.isEmpty())
+    this->costLabel_ = new QLabel(this);
+    this->costLabel_->setStyleSheet(QStringLiteral("color: %1").arg(colorCss(dim)));
+    layout->addWidget(this->costLabel_);
+
+    this->promptLabel_ = new QLabel(this);
+    this->promptLabel_->setTextFormat(Qt::PlainText);
+    this->promptLabel_->setWordWrap(true);
+    this->promptLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    this->promptLabel_->setContentsMargins(0, 6, 0, 0);
+    layout->addWidget(this->promptLabel_);
+
+    if (view.reward.isUserInputRequired)
     {
-        prompt = "No description provided.";
-    }
-    this->descriptionLabel_ =
-        layout.emplace<QLabel>(prompt).assign(&this->descriptionLabel_).getElement();
-    this->descriptionLabel_->setWordWrap(true);
-    this->descriptionLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-
-    if (this->requiresInput_)
-    {
-        auto *inputLabel = layout.emplace<QLabel>("Text input:").getElement();
-        inputLabel->setWordWrap(true);
-
-        this->inputEdit_ =
-            layout.emplace<QTextEdit>().assign(&this->inputEdit_).getElement();
-        this->inputEdit_->setPlaceholderText("Enter redeem text");
+        layout->addSpacing(6);
+        this->inputEdit_ = new QTextEdit(this);
+        this->inputEdit_->setPlaceholderText("Your message");
         this->inputEdit_->setAcceptRichText(false);
-        this->inputEdit_->setMinimumHeight(120);
         this->inputEdit_->setTabChangesFocus(true);
+        this->inputEdit_->setFixedHeight(84);
+        this->inputEdit_->installEventFilter(this);
         new RedeemInputHighlighter(this->inputEdit_->document());
+        layout->addWidget(this->inputEdit_);
+
+        this->inputInfoLabel_ = new QLabel(this);
+        this->inputInfoLabel_->setAlignment(Qt::AlignRight);
+        layout->addWidget(this->inputInfoLabel_);
+
         QObject::connect(this->inputEdit_, &QTextEdit::textChanged, this,
                          [this] {
-                             this->updateConfirmEnabled();
-                             this->updateInputHighlights();
+                             this->updateInputInfo();
+                             this->updateUi();
                          });
-
-        this->inputLengthLabel_ =
-            layout.emplace<QLabel>().assign(&this->inputLengthLabel_).getElement();
-        this->inputLengthLabel_->setTextInteractionFlags(
-            Qt::TextSelectableByMouse);
     }
 
-    auto *hintLabel = layout
-                          .emplace<QLabel>(
-                              "Hold Shift while confirming to keep this confirm dialog open.")
-                          .getElement();
-    hintLabel->setWordWrap(true);
+    // Separator between "what" and "when".
+    layout->addSpacing(6);
+    auto *line = new QFrame(this);
+    line->setFrameShape(QFrame::HLine);
+    line->setStyleSheet(QStringLiteral("color: %1").arg(colorCss([&] {
+        auto c = text;
+        c.setAlpha(40);
+        return c;
+    }())));
+    layout->addWidget(line);
+    layout->addSpacing(4);
 
-    auto *buttonBox = layout.emplace<QDialogButtonBox>().getElement();
-    this->confirmButton_ = buttonBox->addButton(actionText, QDialogButtonBox::AcceptRole);
+    this->nowRadio_ = new QRadioButton("Redeem now", this);
+    this->onceRadio_ = new QRadioButton("Redeem once, as soon as available", this);
+    this->repeatRadio_ = new QRadioButton("Redeem every time it's available", this);
+    auto *group = new QButtonGroup(this);
+    group->addButton(this->nowRadio_);
+    group->addButton(this->onceRadio_);
+    group->addButton(this->repeatRadio_);
+    layout->addWidget(this->nowRadio_);
+    layout->addWidget(this->onceRadio_);
+    layout->addWidget(this->repeatRadio_);
+
+    this->modeHint_ = new QLabel(this);
+    this->modeHint_->setWordWrap(true);
+    this->modeHint_->setContentsMargins(22, 0, 0, 0);
+    this->modeHint_->setStyleSheet(QStringLiteral("color: %1").arg(colorCss(dim)));
+    layout->addWidget(this->modeHint_);
+
+    layout->addSpacing(4);
+    this->balanceLabel_ = new QLabel(this);
+    this->balanceLabel_->setTextFormat(Qt::RichText);
+    layout->addWidget(this->balanceLabel_);
+
+    layout->addSpacing(8);
+    auto *buttonBox = new QDialogButtonBox(this);
+    this->confirmButton_ =
+        buttonBox->addButton("Redeem", QDialogButtonBox::AcceptRole);
+    this->confirmButton_->setDefault(true);
     this->cancelButton_ =
         buttonBox->addButton("Cancel", QDialogButtonBox::RejectRole);
+    layout->addWidget(buttonBox);
 
+    switch (mode)
+    {
+        case ChannelPointQueueMode::Once:
+            this->onceRadio_->setChecked(true);
+            break;
+        case ChannelPointQueueMode::Repeat:
+            this->repeatRadio_->setChecked(true);
+            break;
+        case ChannelPointQueueMode::None:
+            this->nowRadio_->setChecked(true);
+            break;
+    }
+
+    QObject::connect(group, &QButtonGroup::buttonToggled, this,
+                     [this](QAbstractButton *, bool checked) {
+                         if (checked)
+                         {
+                             this->updateUi();
+                         }
+                     });
     QObject::connect(this->confirmButton_, &QPushButton::clicked, this,
                      &ChannelPointsConfirmDialog::confirm);
     QObject::connect(this->cancelButton_, &QPushButton::clicked, this,
                      &QWidget::close);
 
-    this->updateConfirmEnabled();
-    this->updateInputHighlights();
-    this->resize(this->requiresInput_ ? QSize(460, 320) : QSize(360, 180));
+    this->updateInputInfo();
+    this->updateUi();
+    this->setMinimumWidth(380);
+    this->resize(400, this->sizeHint().height());
+
+    if (this->inputEdit_ != nullptr)
+    {
+        this->inputEdit_->setFocus();
+    }
+    else
+    {
+        this->confirmButton_->setFocus();
+    }
+}
+
+QString ChannelPointsConfirmDialog::rewardId() const
+{
+    return this->view_.reward.id;
+}
+
+void ChannelPointsConfirmDialog::updateReward(const ChannelPointRewardView &view,
+                                              std::optional<int> balance)
+{
+    this->view_ = view;
+    this->balance_ = balance;
+    this->updateUi();
+}
+
+ChannelPointQueueMode ChannelPointsConfirmDialog::selectedMode() const
+{
+    if (this->onceRadio_->isChecked())
+    {
+        return ChannelPointQueueMode::Once;
+    }
+    if (this->repeatRadio_->isChecked())
+    {
+        return ChannelPointQueueMode::Repeat;
+    }
+    return ChannelPointQueueMode::None;
+}
+
+void ChannelPointsConfirmDialog::updateUi()
+{
+    const auto &reward = this->view_.reward;
+    const bool ready = this->view_.block == RewardBlock::None;
+
+    this->titleLabel_->setText(reward.title);
+    this->costLabel_->setText(
+        QStringLiteral("%1 points").arg(fmt::points(reward.cost)));
+
+    const auto prompt = reward.prompt.trimmed();
+    this->promptLabel_->setText(prompt);
+    this->promptLabel_->setVisible(!prompt.isEmpty());
+
+    // "Now" only makes sense when the reward is available.
+    this->nowRadio_->setEnabled(ready && !this->view_.inFlight);
+    this->nowRadio_->setText(
+        ready ? QStringLiteral("Redeem now")
+              : QStringLiteral("Redeem now (%1)")
+                    .arg(fmt::blockDetail(this->view_, this->balance_)));
+    if (!this->nowRadio_->isEnabled() && this->nowRadio_->isChecked())
+    {
+        this->onceRadio_->setChecked(true);
+    }
+
+    const auto mode = this->selectedMode();
+    switch (mode)
+    {
+        case ChannelPointQueueMode::None:
+            this->confirmButton_->setText(
+                QStringLiteral("Redeem for %1").arg(fmt::points(reward.cost)));
+            this->modeHint_->hide();
+            break;
+
+        case ChannelPointQueueMode::Once:
+            this->confirmButton_->setText("Queue");
+            this->modeHint_->setText(
+                ready ? QStringLiteral("Available now, so this redeems right "
+                                       "away.")
+                      : QStringLiteral("Waits until it's available (%1), then "
+                                       "redeems once. Keeps waiting while "
+                                       "Chatterino is open.")
+                            .arg(fmt::blockDetail(this->view_, this->balance_)));
+            this->modeHint_->show();
+            break;
+
+        case ChannelPointQueueMode::Repeat:
+            this->confirmButton_->setText("Start repeating");
+            this->modeHint_->setText(
+                "Redeems whenever it's available until you cancel it or run "
+                "out of points.");
+            this->modeHint_->show();
+            break;
+    }
+
+    // Balance after, so the cost is never a surprise.
+    const auto text = this->palette().color(QPalette::WindowText);
+    if (this->balance_)
+    {
+        const auto after = *this->balance_ - reward.cost;
+        if (after >= 0)
+        {
+            auto dim = text;
+            dim.setAlpha(160);
+            this->balanceLabel_->setText(
+                QStringLiteral("<span style=\"color:%1\">Balance</span> "
+                               "%2 → <b>%3</b>")
+                    .arg(colorCss(dim), fmt::points(*this->balance_),
+                         fmt::points(after)));
+        }
+        else
+        {
+            this->balanceLabel_->setText(
+                QStringLiteral("<span style=\"color:%1\">You have %2 points, "
+                               "%3 short.</span>")
+                    .arg(colorCss(ERROR_COLOR), fmt::points(*this->balance_),
+                         fmt::points(-after)));
+        }
+        this->balanceLabel_->show();
+    }
+    else
+    {
+        this->balanceLabel_->hide();
+    }
+
+    bool canConfirm = !this->view_.inFlight;
+    if (this->inputEdit_ != nullptr &&
+        this->inputEdit_->toPlainText().trimmed().isEmpty())
+    {
+        canConfirm = false;
+    }
+    if (mode == ChannelPointQueueMode::None && !ready)
+    {
+        canConfirm = false;
+    }
+    this->confirmButton_->setEnabled(canConfirm);
+    this->confirmButton_->setToolTip(
+        canConfirm ? QStringLiteral("Hold Shift to keep this dialog open")
+                   : QString());
+}
+
+void ChannelPointsConfirmDialog::updateInputInfo()
+{
+    if (this->inputEdit_ == nullptr || this->inputInfoLabel_ == nullptr)
+    {
+        return;
+    }
+
+    const auto size = this->inputEdit_->toPlainText().size();
+    if (size > REDEEM_INPUT_SOFT_LIMIT)
+    {
+        this->inputInfoLabel_->setStyleSheet(
+            QStringLiteral("color: %1").arg(colorCss(WARNING_COLOR)));
+        this->inputInfoLabel_->setText(
+            QStringLiteral("%1 / %2, Twitch may cut the rest")
+                .arg(size)
+                .arg(REDEEM_INPUT_SOFT_LIMIT));
+        return;
+    }
+
+    auto dim = this->palette().color(QPalette::WindowText);
+    dim.setAlpha(140);
+    this->inputInfoLabel_->setStyleSheet(
+        QStringLiteral("color: %1").arg(colorCss(dim)));
+    this->inputInfoLabel_->setText(
+        QStringLiteral("%1 / %2").arg(size).arg(REDEEM_INPUT_SOFT_LIMIT));
 }
 
 void ChannelPointsConfirmDialog::keyPressEvent(QKeyEvent *event)
 {
-    if (this->requiresInput_ && this->inputEdit_ != nullptr)
-    {
-        BasePopup::keyPressEvent(event);
-        return;
-    }
-
     if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
     {
-        this->confirm();
+        if (this->focusWidget() == this->cancelButton_)
+        {
+            this->close();
+        }
+        else
+        {
+            this->confirm();
+        }
         return;
     }
 
     BasePopup::keyPressEvent(event);
 }
 
+bool ChannelPointsConfirmDialog::eventFilter(QObject *watched, QEvent *event)
+{
+    // Enter in the text box confirms; reward input is a single message.
+    if (watched == this->inputEdit_ && event->type() == QEvent::KeyPress)
+    {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Return ||
+            keyEvent->key() == Qt::Key_Enter)
+        {
+            this->confirm();
+            return true;
+        }
+    }
+    return BasePopup::eventFilter(watched, event);
+}
+
 void ChannelPointsConfirmDialog::confirm()
 {
-    const bool keepDialogOpen =
+    if (!this->confirmButton_->isEnabled())
+    {
+        return;
+    }
+
+    // Shift keeps the dialog open to fire several in a row.
+    const bool keepOpen =
         QApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
-    const auto inputText =
-        this->inputEdit_ == nullptr ? QString() : this->inputEdit_->toPlainText();
-    Q_EMIT this->confirmed(this->action_, keepDialogOpen, inputText);
-    if (!keepDialogOpen)
+    const auto inputText = this->inputEdit_ == nullptr
+                               ? QString()
+                               : this->inputEdit_->toPlainText().trimmed();
+
+    Q_EMIT this->confirmed(this->view_.reward.id, this->selectedMode(),
+                           inputText, this->view_.reward.cost);
+
+    if (!keepOpen)
     {
         this->close();
     }
-}
-
-void ChannelPointsConfirmDialog::updateConfirmEnabled()
-{
-    if (this->confirmButton_ == nullptr)
-    {
-        return;
-    }
-
-    if (!this->requiresInput_ || this->inputEdit_ == nullptr)
-    {
-        this->confirmButton_->setEnabled(true);
-        return;
-    }
-
-    this->confirmButton_->setEnabled(
-        !this->inputEdit_->toPlainText().trimmed().isEmpty());
-}
-
-void ChannelPointsConfirmDialog::updateInputHighlights()
-{
-    if (!this->requiresInput_ || this->inputEdit_ == nullptr)
-    {
-        return;
-    }
-
-    const auto text = this->inputEdit_->toPlainText();
-
-    if (this->inputLengthLabel_ == nullptr)
-    {
-        return;
-    }
-
-    if (text.isEmpty())
-    {
-        this->inputLengthLabel_->clear();
-        return;
-    }
-
-    if (text.size() > REDEEM_INPUT_SOFT_LIMIT)
-    {
-        this->inputLengthLabel_->setStyleSheet("color: #9a7d00");
-        this->inputLengthLabel_->setText(
-            QString("%1 chars (%2 over 500)")
-                .arg(text.size())
-                .arg(text.size() - REDEEM_INPUT_SOFT_LIMIT));
-        return;
-    }
-
-    this->inputLengthLabel_->setStyleSheet("");
-    this->inputLengthLabel_->setText(QString("%1 chars").arg(text.size()));
 }
 
 }  // namespace chatterino

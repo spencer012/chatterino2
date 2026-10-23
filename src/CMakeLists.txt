@@ -77,11 +77,18 @@ set(SOURCE_FILES
 
         controllers/chathistory/ChatHistoryManager.cpp
         controllers/chathistory/ChatHistoryManager.hpp
-        controllers/channelpoints/ChannelPointsClient.cpp
-        controllers/channelpoints/ChannelPointsClient.hpp
+        controllers/channelpoints/ChannelPointsApi.cpp
+        controllers/channelpoints/ChannelPointsApi.hpp
+        controllers/channelpoints/ChannelPointsAuth.cpp
+        controllers/channelpoints/ChannelPointsAuth.hpp
         controllers/channelpoints/ChannelPointsController.cpp
         controllers/channelpoints/ChannelPointsController.hpp
-        controllers/channelpoints/ChannelPointsModels.hpp
+        controllers/channelpoints/ChannelPointsLog.cpp
+        controllers/channelpoints/ChannelPointsLog.hpp
+        controllers/channelpoints/ChannelPointsTypes.cpp
+        controllers/channelpoints/ChannelPointsTypes.hpp
+        controllers/channelpoints/HermesClient.cpp
+        controllers/channelpoints/HermesClient.hpp
         controllers/crowdcopy/CrowdCopyEngine.cpp
         controllers/crowdcopy/CrowdCopyEngine.hpp
         controllers/replay/ReplayController.cpp
@@ -937,6 +944,7 @@ set(SOURCE_FILES
         widgets/splits/InputHighlighter.hpp
         widgets/splits/ChannelPointsConfirmDialog.cpp
         widgets/splits/ChannelPointsConfirmDialog.hpp
+        widgets/splits/ChannelPointsFormat.hpp
         widgets/splits/ChannelPointsPopup.cpp
         widgets/splits/ChannelPointsPopup.hpp
         widgets/splits/MessageHistoryItem.cpp
