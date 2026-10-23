@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "messages/MessageContentPool.hpp"
 #include "messages/MessageFlag.hpp"
 #include "providers/twitch/api/HelixEnums.hpp"
 #include "providers/twitch/ChannelPointReward.hpp"
@@ -49,6 +50,10 @@ struct Message {
     QString id;
     QString searchText;
     QString messageText;
+    /// Tracks whether `messageText` shares its data with equal text of other
+    /// messages through the MessageContentPool. Reset it before modifying
+    /// `messageText` after the message was built.
+    MessageContentRef messageTextContent;
     // TODO: This field is used ambiguously, it could use a comment or a name change to
     // clarify the intent of the field
     QString loginName;

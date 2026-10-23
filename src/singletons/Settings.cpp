@@ -19,6 +19,7 @@
 #include "controllers/moderationactions/ModerationAction.hpp"
 #include "controllers/nicknames/Nickname.hpp"
 #include "debug/Benchmark.hpp"
+#include "messages/MessageContentPool.hpp"
 #include "pajlada/settings/signalargs.hpp"
 #include "util/Backup.hpp"
 #include "util/WindowsHelper.hpp"
@@ -1194,6 +1195,12 @@ Settings::Settings(const Modes &modes, const Args &args,
                            this->loggedChannels);
 
     instance_ = this;
+
+    this->deduplicateMessageContent.connect(
+        [](bool enabled) {
+            MessageContentPool::global().setEnabled(enabled);
+        },
+        this->signalHolder);
 
 #ifdef USEWINSDK
     this->autorun = isRegisteredForStartup();

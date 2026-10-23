@@ -1744,6 +1744,15 @@ void GeneralPage::initLayout(GeneralPageView &layout)
     SettingWidget::checkbox("Log message cache performance every 30 seconds",
                             s.cachePerformanceLogging)
         ->addTo(layout);
+    SettingWidget::checkbox("Deduplicate repeated message content",
+                            s.deduplicateMessageContent)
+        ->setTooltip("Shares text and parsed word lists, including text in "
+                     "emote messages. "
+                     "Message identity and emote rendering remain independent. "
+                     "Existing shared history stays shared when disabled. "
+                     "Use Channel history > Cache diagnostics to inspect "
+                     "estimated savings.")
+        ->addTo(layout);
 
     SettingWidget::intInput("Usercard scrollback limit (requires restart)",
                             s.scrollbackUsercardLimit,

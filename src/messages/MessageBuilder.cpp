@@ -20,6 +20,7 @@
 #include "messages/Image.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageColor.hpp"
+#include "messages/MessageContentPool.hpp"
 #include "messages/MessageElement.hpp"
 #include "messages/MessageThread.hpp"
 #include "providers/bttv/BttvBadges.hpp"
@@ -2060,6 +2061,11 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         highlight.sound.clear();
         highlight.windowAlert = false;
     }
+
+    // Share repeated immutable payloads (text runs, usernames, message text)
+    // with equal content of other messages. Every occurrence keeps its own
+    // message and elements.
+    MessageContentPool::global().shareMessageContent(builder.message());
 
     return {builder.release(), highlight};
 }

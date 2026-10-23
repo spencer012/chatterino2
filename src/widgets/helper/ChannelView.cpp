@@ -12,6 +12,7 @@
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/filters/FilterSet.hpp"
 #include "debug/Benchmark.hpp"
+#include "debug/MessageContentStats.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
 #include "messages/layouts/MessageLayout.hpp"
@@ -1023,21 +1024,22 @@ const MessageLayoutSnapshot &ChannelView::getMessagesSnapshot()
 
 QString ChannelView::cacheDiagnostics() const
 {
-    auto description = QString("Channel: %1\nRetained view messages: %2 / %3\n%4")
-        .arg(this->underlyingChannel_ ? this->underlyingChannel_->getName()
-                                      : QString{})
-        .arg(this->messages_.size())
-        .arg(this->messages_.limit())
-        .arg(this->cacheStats_.describe());
+    auto description =
+        QString("Channel: %1\nRetained view messages: %2 / %3\n%4")
+            .arg(this->underlyingChannel_ ? this->underlyingChannel_->getName()
+                                          : QString{})
+            .arg(this->messages_.size())
+            .arg(this->messages_.limit())
+            .arg(this->cacheStats_.describe());
     if (this->underlyingChannel_)
     {
         description += QString("\nBacking channel messages: %1 / %2\n"
                                "Message ID index entries: %3")
-            .arg(this->underlyingChannel_->countMessages())
-            .arg(this->underlyingChannel_->messageLimit())
-            .arg(this->underlyingChannel_->messageIDIndexSize());
+                           .arg(this->underlyingChannel_->countMessages())
+                           .arg(this->underlyingChannel_->messageLimit())
+                           .arg(this->underlyingChannel_->messageIDIndexSize());
     }
-    return description;
+    return description + "\n\n" + describeMessageContentPool();
 }
 
 void ChannelView::setMessageLimit(size_t limit)

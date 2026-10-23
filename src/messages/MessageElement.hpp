@@ -8,6 +8,7 @@
 #include "messages/ImageSet.hpp"
 #include "messages/Link.hpp"
 #include "messages/MessageColor.hpp"
+#include "messages/MessageContentPool.hpp"
 #include "providers/links/LinkInfo.hpp"
 #include "singletons/Fonts.hpp"
 
@@ -210,6 +211,13 @@ public:
     /// Creates a new identical message element.
     virtual std::unique_ptr<MessageElement> clone() const = 0;
 
+    /// Replaces immutable payloads of this element (e.g. word lists) with
+    /// equal payloads shared through `pool`. Per-element state such as
+    /// colors, flags, links and layout caches stays owned by this element.
+    ///
+    /// @returns The number of payloads that are now pooled.
+    virtual std::size_t shareContent(MessageContentPool &pool);
+
     /// When this element is added to a container, this decides whether the flag check
     /// should require the context flags to contain all flags of this element (true), as opposed
     /// to the context flag containing at least one of the flags of this element (false).
@@ -331,8 +339,19 @@ public:
         return this->words_;
     }
 
+    std::size_t shareContent(MessageContentPool &pool) override;
+
+    /// Whether `words()` currently shares its data through a content pool.
+    bool hasSharedWords() const
+    {
+        return this->wordsContent_.isShared();
+    }
+
 protected:
     QStringList words_;
+    /// Participation of `words_` in a MessageContentPool. Reset it before
+    /// changing `words_`.
+    MessageContentRef wordsContent_;
 
     MessageColor color_;
     FontStyle style_;
@@ -438,6 +457,9 @@ public:
     QJsonObject toJson() const override;
     std::string_view type() const override;
     std::unique_ptr<MessageElement> clone() const override;
+
+    /// Links pick their words while being laid out, so they are not pooled.
+    std::size_t shareContent(MessageContentPool &pool) override;
 
 private:
     LinkInfo linkInfo_;
@@ -587,6 +609,7 @@ public:
     QJsonObject toJson() const override;
     std::string_view type() const override;
     std::unique_ptr<MessageElement> clone() const override;
+    std::size_t shareContent(MessageContentPool &pool) override;
 
 private:
     MessageLayoutElement *makeImageLayoutElement(
