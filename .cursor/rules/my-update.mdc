@@ -202,6 +202,7 @@ This is a fork of an existing open source project with some custom functionality
      - Preferred quality maps to `best`, no quality argument (config priority list), or the custom priority string. An empty custom list falls back to `best`. Popup quality names are passed through unchanged, including labels like `1080p60 (source)`.
      - `--config` is sent only when the config file setting is non-empty. Otherwise TwitchPipe uses its own lookup, next to the executable and then the working directory.
      - A normal Streamlink launch still gets the same arguments. The chat system message is `Opening <channel> in Streamlink ...` or `Opening <channel> in TwitchPipe ...`.
+     - Upstream #7355 launches Streamlink attached and shows `StreamLinkErrorPopup` with its output on a non-zero exit. The fork keeps detached launches for both backends, so only the Streamlink quality listing uses that popup (stdout/stderr merged, shown when the last line isn't `Available streams:`). A player that fails after it starts is not reported.
      - Attached quality queries are deleted when they exit. FailedToStart shows one not-found dialog and deletes the process. Detached launches use `startDetached`, show that dialog only from the false return, and delete the `QProcess` without waiting for the player to exit.
      - Holding Shift while starting a launch with quality `Choose` skips the popup and uses `best` for both backends. Hotkeys whose binding lacks Shift will not fire with Shift held, so menu and button triggers are the intended path.
      - The menu label "Open in streamlink", the `/streamlink` command, and the `openInStreamlink` hotkey id are unchanged.
@@ -246,3 +247,19 @@ This is a fork of an existing open source project with some custom functionality
      - Ended polls and predictions keep their results on the bar for 30s (`RESULT_DISPLAY_SECONDS`). Prediction status only moves forward (active → locked → pending → ended), so out-of-order updates (an `ACTIVE` one for a last-second prediction after `LOCKED`, `CANCEL_PENDING` after `CANCELED`) are ignored, and repeats are never announced twice. If `LOCKED` hasn't arrived 2s after the window ends, `expire()` locks it locally; the dialog stops accepting predictions as soon as the timer hits 0.
      - The client remembers its own votes and predictions for the session only (`recordPollVote` / `recordPrediction`); votes made elsewhere aren't shown (deliberately; `predictions-user-v1` isn't used). The prediction bar header shows your stake and the outcome you picked, in its color.
      - Bars can be collapsed (click the header) or hidden per event (×). Polls and predictions start expanded until you take part, then collapse to a one-line summary.
+
+
+12. **Highlight-only ignore phrases**
+   - **Feature**: A blocking ignore phrase can be marked "Highlight-only". It then never hides the message; when a highlighted message matches, it can independently keep that message out of `/mentions` ("Suppress Mentions") and drop its highlight color ("Suppress Color"). Sounds and taskbar alerts still fire.
+   - **Files Modified**:
+     - `src/controllers/ignores/IgnorePhrase.hpp/.cpp` - `highlightOnly`, `suppressMentions`, `suppressHighlight` fields, serialized under the same names (missing = false).
+     - `src/controllers/ignores/IgnoreController.hpp/.cpp` - `isIgnoredMessage` skips highlight-only phrases; `checkIgnoredHighlights()` ORs the suppress options of every matching highlight-only phrase.
+     - `src/controllers/ignores/IgnoreModel.cpp`, `src/widgets/settingspages/IgnoresPage.cpp` - Three extra checkbox columns.
+     - `src/messages/MessageFlag.hpp` - `DoNotShowInMentions` (1 << 47) and `DisableHighlightColor` (1 << 48).
+     - `src/messages/MessageBuilder.cpp` - `makeIrcMessage` checks the phrases before `parseHighlights()` and sets the flags afterwards, only when the message ended up `Highlighted`.
+     - `src/messages/Message.cpp`, `src/messages/layouts/MessageLayout.cpp` - `DisableHighlightColor` hides the scrollbar marker and background color.
+     - `src/providers/twitch/IrcMessageHandler.cpp`, `src/providers/twitch/TwitchChannel.cpp` - `DoNotShowInMentions` is checked wherever IRC messages and recent messages are copied into `/mentions`.
+     - `tests/src/IgnoreController.cpp`, `tests/src/IrcMessageHandler.cpp` - Phrase round-trip and mentions/color suppression.
+   - **Behavior Notes**:
+     - Only the IRC message path (`makeIrcMessage`) applies these flags. Upstream's subgift and EventSub automod paths add to `/mentions` directly and are not affected.
+     - Since upstream's highlight rework (#6695), every highlight type sets `MessageFlag::Highlighted` (`HighlightedWhisper` is gone), including first messages, redemptions, subscriptions and announcements. Suppression therefore applies to those too, not only to user/message/badge highlights.
