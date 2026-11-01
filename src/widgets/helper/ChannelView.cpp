@@ -1431,9 +1431,9 @@ void ChannelView::messageAppended(MessagePtr &message,
         }
     }
 
-    if (this->replayIndexValid_ && message->serverReceivedTime.isValid())
+    if (this->replayIndexValid_ && message->timestamp.isValid())
     {
-        const auto stamp = message->serverReceivedTime.toMSecsSinceEpoch();
+        const auto stamp = message->timestamp.toMSecsSinceEpoch();
         if (!this->replayTimeIndex_.empty() &&
             stamp < this->replayTimeIndex_.back().first)
         {
@@ -1814,7 +1814,7 @@ bool ChannelView::scrollToServerTime(qint64 wallMs, size_t maxMessagesPerStep)
         this->replayIndexSorted_ = true;
         for (size_t i = 0; i < snapshot.size(); ++i)
         {
-            const auto &time = snapshot[i]->getMessagePtr()->serverReceivedTime;
+            const auto &time = snapshot[i]->getMessagePtr()->timestamp;
             if (time.isValid())
             {
                 const auto stamp = time.toMSecsSinceEpoch();

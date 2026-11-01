@@ -15,7 +15,6 @@
 #include "controllers/sound/ISoundController.hpp"
 #include "providers/twitch/ChannelEvents.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
-#include "singletons/Settings.hpp"
 
 #include <QUrl>
 
@@ -70,13 +69,10 @@ QString modeName(ChannelPointQueueMode mode)
     return QStringLiteral("manual");
 }
 
+// Upstream's highlight rework removed the global custom highlight sound, so
+// this is always the built-in ping.
 QUrl successSoundUrl()
 {
-    const auto customPath = getSettings()->pathHighlightSound.getValue();
-    if (!customPath.isEmpty())
-    {
-        return QUrl::fromLocalFile(customPath);
-    }
     return QUrl("qrc:/sounds/ping2.wav");
 }
 

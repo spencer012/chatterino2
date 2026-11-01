@@ -552,7 +552,7 @@ TEST(ChannelViewHistory, ReplayIndexAppendsAtCapacityAndRebuildsOnReplacement)
         QDateTime::fromString("2026-10-22T12:00:00Z", Qt::ISODate);
     auto make = [&](int n) {
         MessageBuilder builder;
-        builder->serverReceivedTime = time.addSecs(n);
+        builder->timestamp = time.addSecs(n);
         builder.emplace<TextElement>(QString::number(n),
                                      MessageElementFlag::Text);
         return builder.release();

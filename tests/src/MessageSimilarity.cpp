@@ -79,7 +79,7 @@ TEST(MessageSimilarity, ChannelChecksOnlyConfiguredTailAndCanDisableFiltering)
     auto different = std::make_shared<Message>();
     different->loginName = "other";
     different->messageText = "zzzzzzzzzz";
-    different->serverReceivedTime = time;
+    different->timestamp = time;
     channel.addMessage(different, MessageContext::Original);
     auto candidate = makeMessage(time.addSecs(1));
     channel.applySimilarityFilters(candidate);
@@ -121,7 +121,7 @@ TEST(ChannelHistory, ResizeAndBatchRefillPreserveNewestUniqueMessages)
     auto make = [&](int n) {
         auto message = std::make_shared<Message>();
         message->id = QString::number(n);
-        message->serverReceivedTime = time.addSecs(n);
+        message->timestamp = time.addSecs(n);
         return message;
     };
     channel.addMessage(make(1), MessageContext::Original);
