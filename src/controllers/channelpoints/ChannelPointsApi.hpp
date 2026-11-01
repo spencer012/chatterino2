@@ -46,6 +46,17 @@ QString generateTransactionId();
 /// Generates a random ID used for Hermes requests/subscriptions.
 QString generateHermesId();
 
+/// Twitch posts reward text to chat as a single chat message. Longer text
+/// isn't blocked (Twitch has accepted it before), only warned about.
+constexpr int MAX_REDEEM_INPUT_LENGTH = 500;
+
+/// Replaces line breaks (and whitespace around them) with a single space.
+/// Chat messages are a single line, anything after a line break is lost.
+QString flattenLineBreaks(const QString &text);
+
+/// The text actually sent with a redemption: single line, trimmed.
+QString normalizeRedeemInput(const QString &text);
+
 /// Parses a Twitch timestamp. Twitch uses up to nanosecond precision, which
 /// Qt doesn't handle, so the fraction is truncated to milliseconds.
 QDateTime parseTwitchTime(const QString &value);

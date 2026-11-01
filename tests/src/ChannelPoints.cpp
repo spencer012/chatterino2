@@ -254,6 +254,22 @@ TEST(ChannelPoints, BuildRedeemRequest)
     EXPECT_FALSE(withText.contains("extensions"));
 }
 
+TEST(ChannelPoints, NormalizeRedeemInput)
+{
+    // Twitch posts reward text to chat as one line; anything after a line
+    // break used to be lost.
+    EXPECT_EQ(normalizeRedeemInput("[voice:v3]\nhello there"),
+              "[voice:v3] hello there");
+    EXPECT_EQ(normalizeRedeemInput("a \r\n\r\n  b"), "a b");
+    EXPECT_EQ(normalizeRedeemInput(QStringLiteral("a b c")), "a b c");
+    EXPECT_EQ(normalizeRedeemInput("  keep  inner  spaces \n"),
+              "keep  inner  spaces");
+    EXPECT_EQ(normalizeRedeemInput("\n\n"), "");
+
+    // Pasted fragments keep their leading/trailing spaces.
+    EXPECT_EQ(flattenLineBreaks(" one\ntwo "), " one two ");
+}
+
 TEST(ChannelPoints, BuildContextRequest)
 {
     auto request = buildContextRequest("pajlada", false);

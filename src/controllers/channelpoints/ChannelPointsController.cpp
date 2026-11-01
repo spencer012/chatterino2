@@ -272,7 +272,7 @@ void ChannelPointsController::redeemNow(const QString &channelLogin,
     this->startAttempt(*channel, it.value(),
                        Attempt{
                            .transactionId = generateTransactionId(),
-                           .textInput = textInput,
+                           .textInput = normalizeRedeemInput(textInput),
                            .confirmedCost = confirmedCost,
                            .manual = true,
                        });
@@ -297,7 +297,7 @@ void ChannelPointsController::queueReward(const QString &channelLogin,
 
     auto &reward = it.value();
     reward.queueMode = mode;
-    reward.queuedInput = textInput;
+    reward.queuedInput = normalizeRedeemInput(textInput);
     reward.queuedCost = confirmedCost;
     reward.consecutiveFailures = 0;
     reward.nextAttemptAt = {};
