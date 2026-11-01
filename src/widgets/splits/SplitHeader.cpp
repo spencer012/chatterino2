@@ -29,6 +29,7 @@
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
+#include "widgets/dialogs/CacheDiagnosticsDialog.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/CommonTexts.hpp"
@@ -568,13 +569,27 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
             getSettings()->cachePerformanceLogging = enabled;
         });
         history->addAction("Cache diagnostics...", this, [this] {
-            QMessageBox dialog(
-                QMessageBox::Information, "Message cache diagnostics",
-                this->split_->getChannelView().cacheDiagnostics(),
-                QMessageBox::Ok, this);
-            dialog.setTextInteractionFlags(Qt::TextSelectableByMouse |
-                                           Qt::TextSelectableByKeyboard);
-            dialog.exec();
+            QElapsedTimer timer;
+            timer.start();
+            auto report = this->split_->getChannelView().cacheDiagnostics();
+            report += QString("\n\nSnapshot generated in: %1 ms")
+                          .arg(QLocale().toString(
+                              timer.nsecsElapsed() / 1000000.0, 'f', 3));
+            if (!this->cacheDiagnosticsDialog_ ||
+                !this->cacheDiagnosticsDialog_->isVisible())
+            {
+                this->cacheDiagnosticsDialog_ =
+                    new CacheDiagnosticsDialog(report, this);
+                this->cacheDiagnosticsDialog_->setAttribute(
+                    Qt::WA_DeleteOnClose);
+            }
+            else
+            {
+                this->cacheDiagnosticsDialog_->setReport(report);
+            }
+            this->cacheDiagnosticsDialog_->show();
+            this->cacheDiagnosticsDialog_->raise();
+            this->cacheDiagnosticsDialog_->activateWindow();
         });
         menu->addAction(
             "Channel points",

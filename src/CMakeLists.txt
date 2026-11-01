@@ -810,6 +810,8 @@ set(SOURCE_FILES
         widgets/dialogs/SelectChannelFiltersDialog.cpp
         widgets/dialogs/SelectChannelFiltersDialog.hpp
         widgets/dialogs/SettingsDialog.cpp
+        widgets/dialogs/CacheDiagnosticsDialog.cpp
+        widgets/dialogs/CacheDiagnosticsDialog.hpp
         widgets/dialogs/SettingsDialog.hpp
         widgets/dialogs/UpdateDialog.cpp
         widgets/dialogs/UpdateDialog.hpp
