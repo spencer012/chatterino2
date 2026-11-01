@@ -319,6 +319,7 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
     , tooltipWidget_(new TooltipWidget(this))
 {
     this->setMouseTracking(true);
+    initializeMessageCachePerformance();
 
     auto *metricsTimer = new QTimer(this);
     metricsTimer->setInterval(30000);
@@ -330,11 +331,12 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
             if (report != this->lastCacheLogReport_ ||
                 now - this->lastCacheLogTime_ >= std::chrono::minutes(5))
             {
-                logMessageCachePerformance(report + "\n\n" +
-                                           describeMessageContentPool());
+                queueMessageCachePerformance(report);
                 this->lastCacheLogReport_ = report;
                 this->lastCacheLogTime_ = now;
             }
+            this->cacheStats_.layout.resetInterval();
+            this->cacheStats_.paint.resetInterval();
         }
     });
     metricsTimer->start();
@@ -866,7 +868,7 @@ void ChannelView::updateScrollbar(const MessageLayoutSnapshot &messages,
              static_cast<size_t>(i) >= this->layoutLastVisible_) &&
             !this->messagesOnScreen_.contains(messages[i]))
         {
-            message->deleteCache();
+            this->retainMeasuredLayout(messages[i]);
         }
 
         if (h < 0)  // break condition
@@ -902,6 +904,7 @@ void ChannelView::updateScrollbar(const MessageLayoutSnapshot &messages,
 
 void ChannelView::clearMessages()
 {
+    this->clearMeasuredLayouts();
     for (const auto &layout : this->messagesOnScreen_)
     {
         layout->deleteCache();
@@ -977,7 +980,8 @@ QString ChannelView::getSelectedText()
                       : layout->getLastCharacterIndex() + 1;
 
         layout->addSelectionText(result, from, to);
-        if (!this->messagesOnScreen_.contains(layout))
+        if (!this->messagesOnScreen_.contains(layout) &&
+            !this->measuredLayouts_.contains(layout))
         {
             layout->deleteCache();
         }
@@ -1043,6 +1047,8 @@ QString ChannelView::cacheDiagnostics(bool includeContentPool) const
             .arg(localizeNumbers(this->messages_.size()))
             .arg(localizeNumbers(this->messages_.limit()))
             .arg(this->cacheStats_.describe());
+    description += "\nCached measurement layouts: " +
+                   localizeNumbers(this->measuredLayouts_.size());
     description += QString("\nView ID: %1/%2")
                        .arg(messageCacheSessionId())
                        .arg(this->cacheStats_.viewId);
@@ -1900,6 +1906,10 @@ bool ChannelView::scrollToServerTime(qint64 wallMs, size_t maxMessagesPerStep)
                  this->scale() * static_cast<float>(this->devicePixelRatio())},
             false);
         const qreal messageHeight = std::max<qreal>(1, message->getHeight());
+        if (!this->messagesOnScreen_.contains(message))
+        {
+            this->retainMeasuredLayout(message);
+        }
         if (remaining < messageHeight)
         {
             desired = static_cast<qreal>(i) +
@@ -2096,8 +2106,15 @@ void ChannelView::drawMessages(QPainter &painter, const QRegion &area)
     // delete the message buffers that aren't on screen
     for (const std::shared_ptr<MessageLayout> &item : this->messagesOnScreen_)
     {
-        item->deleteCache();
-        ++this->cacheStats_.layoutsReleased;
+        if (this->measuredLayouts_.contains(item))
+        {
+            item->deleteBuffer();
+        }
+        else
+        {
+            item->deleteCache();
+            ++this->cacheStats_.layoutsReleased;
+        }
     }
 
     this->messagesOnScreen_.clear();
@@ -2114,6 +2131,39 @@ void ChannelView::drawMessages(QPainter &painter, const QRegion &area)
             break;
         }
     }
+
+    constexpr size_t MAX_MEASURED_LAYOUTS = 256;
+    while (this->measuredLayoutOrder_.size() > MAX_MEASURED_LAYOUTS)
+    {
+        auto layout = std::move(this->measuredLayoutOrder_.front());
+        this->measuredLayoutOrder_.pop_front();
+        this->measuredLayouts_.erase(layout);
+        if (!this->messagesOnScreen_.contains(layout))
+        {
+            layout->deleteCache();
+            ++this->cacheStats_.layoutsReleased;
+        }
+    }
+}
+
+void ChannelView::retainMeasuredLayout(const MessageLayoutPtr &layout)
+{
+    layout->deleteBuffer();
+    if (this->measuredLayouts_.insert(layout).second)
+    {
+        this->measuredLayoutOrder_.push_back(layout);
+    }
+}
+
+void ChannelView::clearMeasuredLayouts()
+{
+    for (const auto &layout : this->measuredLayouts_)
+    {
+        layout->deleteCache();
+        ++this->cacheStats_.layoutsReleased;
+    }
+    this->measuredLayouts_.clear();
+    this->measuredLayoutOrder_.clear();
 }
 
 void ChannelView::wheelEvent(QWheelEvent *event)
@@ -2188,7 +2238,7 @@ void ChannelView::wheelEvent(QWheelEvent *event)
                     currentScrollLeft = snapshot[i - 1]->getHeight();
                     if (!this->messagesOnScreen_.contains(snapshot[i - 1]))
                     {
-                        snapshot[i - 1]->deleteCache();
+                        this->retainMeasuredLayout(snapshot[i - 1]);
                     }
                 }
             }
@@ -2236,7 +2286,7 @@ void ChannelView::wheelEvent(QWheelEvent *event)
                     currentScrollLeft = snapshot[i + 1]->getHeight();
                     if (!this->messagesOnScreen_.contains(snapshot[i + 1]))
                     {
-                        snapshot[i + 1]->deleteCache();
+                        this->retainMeasuredLayout(snapshot[i + 1]);
                     }
                 }
             }
@@ -3421,6 +3471,7 @@ void ChannelView::mouseDoubleClickEvent(QMouseEvent *event)
 
 void ChannelView::hideEvent(QHideEvent * /*event*/)
 {
+    this->clearMeasuredLayouts();
     this->animationArea_ = {};
     for (const auto &layout : this->messagesOnScreen_)
     {
