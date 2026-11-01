@@ -13,6 +13,7 @@
 #include "controllers/channelpoints/ChannelPointsLog.hpp"
 #include "controllers/channelpoints/HermesClient.hpp"
 #include "controllers/sound/ISoundController.hpp"
+#include "providers/twitch/ChannelEvents.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "singletons/Settings.hpp"
 
@@ -756,6 +757,154 @@ void ChannelPointsController::postGql(
         .onSuccess(handle)
         .onError(handle)
         .execute();
+}
+
+bool ChannelPointsController::isSignedIn()
+{
+    this->ensureInitialized();
+    return !this->auth_->token().isEmpty();
+}
+
+void ChannelPointsController::voteInPoll(const QString &channelLogin,
+                                         const QString &pollId,
+                                         const QString &choiceId,
+                                         ActionCallback callback)
+{
+    this->ensureInitialized();
+    const auto login = normalizeLogin(channelLogin);
+    const auto userId = this->auth_->userId();
+    if (this->auth_->token().isEmpty() || userId.isEmpty())
+    {
+        callback(false, QStringLiteral("Sign in to channel points first."));
+        return;
+    }
+
+    const auto voteId = generateTransactionId();
+    logInfo(QStringLiteral("[%1] voting in poll %2 for choice %3 (vote %4)")
+                .arg(login, pollId, choiceId, voteId));
+
+    this->postGql(
+        QStringLiteral("VoteInPoll"),
+        [pollId, choiceId, userId, voteId](bool inlineQuery) {
+            return channelevents::buildVoteRequest(pollId, choiceId, userId,
+                                                   voteId, inlineQuery);
+        },
+        [this, login, callback](const GqlResponse &response) {
+            if (response.unauthorized)
+            {
+                this->auth_->reportTokenRejected(QStringLiteral("VoteInPoll"));
+            }
+            if (!response.transportError.isEmpty())
+            {
+                logWarning(QStringLiteral("[%1] vote failed: %2")
+                               .arg(login, response.transportError));
+                callback(false,
+                         QStringLiteral("No answer from Twitch (%1).")
+                             .arg(response.transportError));
+                return;
+            }
+
+            QString error;
+            const auto parsed =
+                channelevents::parseVoteResponse(response.root, error);
+            if (!parsed)
+            {
+                logWarning(
+                    QStringLiteral("[%1] vote failed: %2").arg(login, error));
+                callback(false, error);
+                return;
+            }
+            if (!parsed->ok)
+            {
+                logWarning(QStringLiteral("[%1] vote refused: %2")
+                               .arg(login, parsed->errorCode));
+                callback(false,
+                         channelevents::describeVoteError(parsed->errorCode));
+                return;
+            }
+
+            logInfo(QStringLiteral("[%1] vote accepted").arg(login));
+            callback(true, {});
+        });
+}
+
+void ChannelPointsController::makePrediction(const QString &channelLogin,
+                                             const QString &eventId,
+                                             const QString &outcomeId,
+                                             std::int64_t points,
+                                             ActionCallback callback)
+{
+    this->ensureInitialized();
+    const auto login = normalizeLogin(channelLogin);
+    if (this->auth_->token().isEmpty())
+    {
+        callback(false, QStringLiteral("Sign in to channel points first."));
+        return;
+    }
+    if (points <= 0 || points > channelevents::MAX_PREDICTION_POINTS)
+    {
+        callback(false, QStringLiteral("Predict between 1 and %1 points.")
+                            .arg(channelevents::MAX_PREDICTION_POINTS));
+        return;
+    }
+
+    const auto transactionId = generateTransactionId();
+    logInfo(QStringLiteral("[%1] predicting %2 points on outcome %3 of %4 "
+                           "(tx %5)")
+                .arg(login)
+                .arg(points)
+                .arg(outcomeId, eventId, transactionId));
+
+    this->postGql(
+        QStringLiteral("MakePrediction"),
+        [eventId, outcomeId, points, transactionId](bool inlineQuery) {
+            return channelevents::buildPredictionRequest(
+                eventId, outcomeId, points, transactionId, inlineQuery);
+        },
+        [this, login, callback](const GqlResponse &response) {
+            if (response.unauthorized)
+            {
+                this->auth_->reportTokenRejected(
+                    QStringLiteral("MakePrediction"));
+            }
+            if (!response.transportError.isEmpty())
+            {
+                logWarning(QStringLiteral("[%1] prediction failed: %2")
+                               .arg(login, response.transportError));
+                callback(false,
+                         QStringLiteral("No answer from Twitch (%1). Check "
+                                        "whether the prediction went through "
+                                        "before trying again.")
+                             .arg(response.transportError));
+                return;
+            }
+
+            QString error;
+            const auto parsed =
+                channelevents::parsePredictionResponse(response.root, error);
+            if (!parsed)
+            {
+                logWarning(QStringLiteral("[%1] prediction failed: %2")
+                               .arg(login, error));
+                callback(false, error);
+                return;
+            }
+            if (!parsed->ok)
+            {
+                logWarning(QStringLiteral("[%1] prediction refused: %2")
+                               .arg(login, parsed->errorCode));
+                callback(false, channelevents::describePredictionError(
+                                    parsed->errorCode));
+                return;
+            }
+
+            logInfo(QStringLiteral("[%1] prediction accepted").arg(login));
+            if (this->findChannel(login) != nullptr)
+            {
+                this->loadChannel(login);
+            }
+            callback(true, {});
+        });
 }
 
 void ChannelPointsController::loadChannel(const QString &login)

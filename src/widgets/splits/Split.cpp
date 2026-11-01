@@ -40,6 +40,7 @@
 #include "widgets/splits/ChannelPointsPopup.hpp"
 #include "widgets/splits/DraggedSplit.hpp"
 #include "widgets/splits/PinnedMessageWidget.hpp"
+#include "widgets/splits/ChannelEventsBanner.hpp"
 #include "widgets/splits/RaidBannerWidget.hpp"
 #include "widgets/splits/SplitContainer.hpp"
 #include "widgets/splits/SplitHeader.hpp"
@@ -98,8 +99,10 @@ Split::Split(QWidget *parent)
     , channel_(Channel::getEmpty())
     , vbox_(new QVBoxLayout(this))
     , header_(new SplitHeader(this))
+    , banners_(new QWidget(this))
     , pinnedBanner_(new PinnedMessageWidget(this))
     , raidBanner_(new RaidBannerWidget(this))
+    , eventsBanner_(new ChannelEventsBanner(this))
     , view_(new ChannelView(this, this, ChannelView::Context::None,
                             getSettings()->scrollbackSplitLimit))
     , input_(new SplitInput(this))
@@ -128,8 +131,13 @@ Split::Split(QWidget *parent)
     }
 
     this->vbox_->addWidget(this->header_);
-    this->vbox_->addWidget(this->pinnedBanner_);
-    this->vbox_->addWidget(this->raidBanner_);
+    auto *bannerLayout = new QVBoxLayout(this->banners_);
+    bannerLayout->setContentsMargins(0, 0, 0, 0);
+    bannerLayout->setSpacing(0);
+    bannerLayout->addWidget(this->pinnedBanner_);
+    bannerLayout->addWidget(this->raidBanner_);
+    bannerLayout->addWidget(this->eventsBanner_);
+    this->vbox_->addWidget(this->banners_);
     this->vbox_->addWidget(this->view_, 1);
     this->vbox_->addWidget(this->input_);
 
@@ -870,11 +878,13 @@ void Split::setChannel(IndirectChannel newChannel)
             });
         this->pinnedBanner_->setChannel(tc);
         this->raidBanner_->setChannel(tc);
+        this->eventsBanner_->setChannel(tc);
     }
     else
     {
         this->pinnedBanner_->setChannel(nullptr);
         this->raidBanner_->setChannel(nullptr);
+        this->eventsBanner_->setChannel(nullptr);
     }
 
     this->indirectChannelChangedConnection_ =
@@ -947,6 +957,20 @@ void Split::setInputHidden(bool value)
 bool Split::getInputHidden() const
 {
     return this->inputHidden_;
+}
+
+void Split::setBannersHidden(bool value)
+{
+    this->bannersHidden_ = value;
+    // The banners show and hide themselves; hiding the container keeps them
+    // out of sight either way.
+    this->banners_->setHidden(value);
+    getApp()->getWindows()->queueSave();
+}
+
+bool Split::getBannersHidden() const
+{
+    return this->bannersHidden_;
 }
 
 std::optional<bool> Split::checkSpellingOverride() const
@@ -1343,6 +1367,7 @@ void Split::popup()
     split->setModerationMode(this->getModerationMode());
     split->setCrowdCopyMode(this->getCrowdCopyMode());
     split->setInputHidden(this->getInputHidden());
+    split->setBannersHidden(this->getBannersHidden());
     split->setFilters(this->getFilters());
 
     window.getNotebook().getOrAddSelectedPage()->insertSplit(split);
@@ -1666,6 +1691,7 @@ SplitDescriptor Split::buildDescriptor() const
     descriptor.moderationMode_ = this->getModerationMode();
     descriptor.crowdCopyMode_ = this->getCrowdCopyMode();
     descriptor.inputHidden_ = this->getInputHidden();
+    descriptor.bannersHidden_ = this->getBannersHidden();
     descriptor.filters_ = this->getFilters();
     descriptor.spellCheckOverride = this->checkSpellingOverride();
 

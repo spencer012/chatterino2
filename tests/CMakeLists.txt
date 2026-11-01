@@ -8,6 +8,8 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/Test.hpp
     ${CMAKE_CURRENT_LIST_DIR}/src/Test.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ChannelChatters.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/ChannelEvents.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/SplitDescriptor.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ChannelPoints.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/AccessGuard.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/NetworkCommon.cpp

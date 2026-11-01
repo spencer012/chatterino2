@@ -520,6 +520,8 @@ set(SOURCE_FILES
         providers/seventv/eventapi/Subscription.cpp
         providers/seventv/eventapi/Subscription.hpp
 
+        providers/twitch/ChannelEvents.cpp
+        providers/twitch/ChannelEvents.hpp
         providers/twitch/ChannelPointReward.cpp
         providers/twitch/ChannelPointReward.hpp
         providers/twitch/IrcMessageHandler.cpp
@@ -946,6 +948,8 @@ set(SOURCE_FILES
         widgets/splits/InputCompletionPopup.hpp
         widgets/splits/InputHighlighter.cpp
         widgets/splits/InputHighlighter.hpp
+        widgets/splits/ChannelEventsBanner.cpp
+        widgets/splits/ChannelEventsBanner.hpp
         widgets/splits/ChannelPointsConfirmDialog.cpp
         widgets/splits/ChannelPointsConfirmDialog.hpp
         widgets/splits/ChannelPointsFormat.hpp
@@ -968,6 +972,8 @@ set(SOURCE_FILES
         widgets/splits/SplitOverlay.hpp
         widgets/splits/PinnedMessageWidget.cpp
         widgets/splits/PinnedMessageWidget.hpp
+        widgets/splits/PredictionDialog.cpp
+        widgets/splits/PredictionDialog.hpp
         widgets/splits/RaidBannerWidget.cpp
         widgets/splits/RaidBannerWidget.hpp
         )

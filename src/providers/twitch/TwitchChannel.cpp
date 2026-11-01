@@ -10,6 +10,7 @@
 #include "common/network/NetworkResult.hpp"  // IWYU pragma: keep
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/channelpoints/ChannelPointsApi.hpp"
 #include "controllers/emotes/EmoteController.hpp"
 #include "controllers/notifications/NotificationController.hpp"
 #include "controllers/twitch/LiveController.hpp"
@@ -1594,6 +1595,8 @@ void TwitchChannel::refreshPubSub()
     getApp()->getTwitchPubSub()->listenToChannelPointRewards(roomId);
     getApp()->getTwitchPubSub()->listenToPinnedChatUpdates(roomId);
     getApp()->getTwitchPubSub()->listenToRaid(roomId);
+    getApp()->getTwitchPubSub()->listenToChannelEvents(roomId);
+    this->refreshChannelEvents();
 
     if (currentAccount->isAnon())
     {
@@ -2715,13 +2718,17 @@ void TwitchChannel::refreshSharedChatSessionState()
 
 void TwitchChannel::refreshPinnedMessage()
 {
+    const auto requestId = ++this->pinnedMessageRequestId_;
+
+    // Helix's chat/pins answers only the broadcaster and mods (403 for anyone
+    // else), so everyone else gets the pin the way the website does.
     auto currentAccount = getApp()->getAccounts()->twitch.getCurrent();
-    if (!currentAccount || currentAccount->isAnon())
+    if (!currentAccount || currentAccount->isAnon() || !this->hasModRights())
     {
+        this->fetchPinnedMessageFromGql(requestId);
         return;
     }
 
-    const auto requestId = ++this->pinnedMessageRequestId_;
     getHelix()->getPinnedChatMessage(
         this->roomId(), currentAccount->getUserId(),
         [weak = this->weakFromThis(),
@@ -2743,10 +2750,66 @@ void TwitchChannel::refreshPinnedMessage()
             }
             self->pinnedMessageChanged.invoke();
         },
-        [](const QString &error) {
+        [weak = this->weakFromThis(), requestId](const QString &error) {
             qCWarning(chatterinoTwitch)
                 << "Failed to fetch pinned message:" << error;
+            auto self = weak.lock();
+            if (self && self->pinnedMessageRequestId_ == requestId)
+            {
+                self->fetchPinnedMessageFromGql(requestId);
+            }
         });
+}
+
+void TwitchChannel::fetchPinnedMessageFromGql(uint64_t requestId)
+{
+    if (getApp()->isTest() || this->getName().isEmpty())
+    {
+        return;
+    }
+
+    NetworkRequest(channelpoints::GQL_URL, NetworkRequestType::Post)
+        .header("Client-Id", channelpoints::WEB_CLIENT_ID)
+        .json(channelevents::buildPinnedMessageRequest(this->getName()))
+        .timeout(15000)
+        .onSuccess([weak = this->weakFromThis(),
+                    requestId](const NetworkResult &result) {
+            auto self = weak.lock();
+            if (!self || self->pinnedMessageRequestId_ != requestId)
+            {
+                return;
+            }
+            QString error;
+            auto msg = channelevents::parsePinnedMessage(
+                result.parseJson(), QDateTime::currentDateTimeUtc(), error);
+            if (!error.isEmpty())
+            {
+                qCWarning(chatterinoTwitch)
+                    << "Failed to fetch pinned message of" << self->getName()
+                    << "from GQL:" << error;
+                return;
+            }
+            if (msg)
+            {
+                self->pinnedMessage_ =
+                    std::make_unique<const HelixPinnedChatMessage>(
+                        std::move(*msg));
+            }
+            else
+            {
+                self->pinnedMessage_ = nullptr;
+            }
+            self->pinnedMessageChanged.invoke();
+        })
+        .onError([weak = this->weakFromThis()](const NetworkResult &result) {
+            if (auto self = weak.lock())
+            {
+                qCWarning(chatterinoTwitch)
+                    << "Failed to fetch pinned message of" << self->getName()
+                    << "from GQL:" << result.formatError();
+            }
+        })
+        .execute();
 }
 
 const HelixPinnedChatMessage *TwitchChannel::getPinnedMessage() const
@@ -2973,6 +3036,166 @@ void TwitchChannel::refreshRaidTargetStream()
         },
         [] {
         });
+}
+
+void TwitchChannel::handleHypeTrainMessage(const QString &type,
+                                           const QJsonObject &data)
+{
+    this->applyChannelEventsResult(this->channelEvents_.applyHypeTrainMessage(
+        type, data, QDateTime::currentDateTimeUtc()));
+}
+
+void TwitchChannel::handlePollMessage(const QString &type,
+                                      const QJsonObject &data)
+{
+    this->applyChannelEventsResult(this->channelEvents_.applyPollMessage(
+        type, data, QDateTime::currentDateTimeUtc()));
+}
+
+void TwitchChannel::handlePredictionMessage(const QString &type,
+                                            const QJsonObject &data)
+{
+    this->applyChannelEventsResult(this->channelEvents_.applyPredictionMessage(
+        type, data, QDateTime::currentDateTimeUtc()));
+}
+
+void TwitchChannel::refreshChannelEvents()
+{
+    // Requests are spaced out, a burst of updates for a train we don't know
+    // only needs one snapshot.
+    static constexpr qint64 MIN_GAP_MS = 5000;
+
+    if (getApp()->isTest() || this->getName().isEmpty())
+    {
+        return;
+    }
+
+    const auto now = QDateTime::currentDateTimeUtc();
+    const auto sinceLast = this->lastChannelEventsRequest_.isValid()
+                               ? this->lastChannelEventsRequest_.msecsTo(now)
+                               : MIN_GAP_MS;
+    if (this->channelEventsRequestPending_ || sinceLast < MIN_GAP_MS)
+    {
+        if (!this->channelEventsRefreshQueued_)
+        {
+            this->channelEventsRefreshQueued_ = true;
+            const auto delay = std::max<qint64>(1000, MIN_GAP_MS - sinceLast);
+            QTimer::singleShot(delay, [weak = this->weakFromThis()] {
+                if (auto self = weak.lock())
+                {
+                    self->channelEventsRefreshQueued_ = false;
+                    self->refreshChannelEvents();
+                }
+            });
+        }
+        return;
+    }
+
+    this->channelEventsRequestPending_ = true;
+    this->lastChannelEventsRequest_ = now;
+
+    NetworkRequest(channelpoints::GQL_URL, NetworkRequestType::Post)
+        .header("Client-Id", channelpoints::WEB_CLIENT_ID)
+        .json(channelevents::buildSnapshotRequest(this->getName()))
+        .timeout(15000)
+        .onSuccess([weak = this->weakFromThis()](const NetworkResult &result) {
+            auto self = weak.lock();
+            if (!self)
+            {
+                return;
+            }
+            self->channelEventsRequestPending_ = false;
+
+            const auto now = QDateTime::currentDateTimeUtc();
+            QString error;
+            auto snapshot =
+                channelevents::parseSnapshot(result.parseJson(), now, error);
+            if (!snapshot)
+            {
+                qCDebug(chatterinoTwitch)
+                    << "Loading hype train/poll/prediction of"
+                    << self->getName() << "failed:" << error;
+                return;
+            }
+            self->applyChannelEventsResult(
+                self->channelEvents_.applySnapshot(*snapshot, now));
+        })
+        .onError([weak = this->weakFromThis()](const NetworkResult &result) {
+            auto self = weak.lock();
+            if (!self)
+            {
+                return;
+            }
+            self->channelEventsRequestPending_ = false;
+            qCDebug(chatterinoTwitch)
+                << "Loading hype train/poll/prediction of" << self->getName()
+                << "failed:" << result.formatError();
+        })
+        .execute();
+}
+
+void TwitchChannel::expireChannelEvents()
+{
+    if (this->channelEvents_.expire(QDateTime::currentDateTimeUtc()))
+    {
+        this->channelEventsChanged.invoke();
+    }
+}
+
+const ChannelEventsTracker &TwitchChannel::channelEvents() const
+{
+    return this->channelEvents_;
+}
+
+void TwitchChannel::recordPollVote(const QString &pollId,
+                                   const QString &choiceId)
+{
+    this->channelEvents_.recordPollVote(pollId, choiceId);
+    this->channelEventsChanged.invoke();
+}
+
+void TwitchChannel::recordPrediction(const QString &eventId,
+                                     const QString &outcomeId,
+                                     std::int64_t points)
+{
+    this->channelEvents_.recordPrediction(eventId, outcomeId, points);
+    this->channelEventsChanged.invoke();
+}
+
+void TwitchChannel::applyChannelEventsResult(
+    const ChannelEventsTracker::Result &result)
+{
+    const auto post = [this](const QString &text) {
+        MessageBuilder builder(systemMessage, text);
+        builder.message().flags.set(MessageFlag::DoNotTriggerNotification);
+        this->addMessage(builder.release(), MessageContext::Original);
+    };
+
+    if (result.endedHypeTrain)
+    {
+        post(channelevents::formatHypeTrainEnd(*result.endedHypeTrain));
+    }
+    if (result.endedPoll)
+    {
+        post(channelevents::formatPollEnd(
+            *result.endedPoll,
+            this->channelEvents_.pollVotes(result.endedPoll->id)));
+    }
+    if (result.endedPrediction)
+    {
+        post(channelevents::formatPredictionEnd(
+            *result.endedPrediction,
+            this->channelEvents_.ownPrediction(result.endedPrediction->id)));
+    }
+
+    if (result.needsSnapshot)
+    {
+        this->refreshChannelEvents();
+    }
+    if (result.changed)
+    {
+        this->channelEventsChanged.invoke();
+    }
 }
 
 }  // namespace chatterino
