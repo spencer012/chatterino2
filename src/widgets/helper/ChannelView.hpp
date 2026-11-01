@@ -19,6 +19,7 @@
 #include <QMenu>
 #include <QPaintEvent>
 #include <QPointer>
+#include <QRegion>
 #include <QScroller>
 #include <QTimer>
 #include <QVariantAnimation>
@@ -108,7 +109,7 @@ public:
                          size_t messagesLimit = 1000);
 
     void queueUpdate();
-    QString cacheDiagnostics() const;
+    QString cacheDiagnostics(bool includeContentPool = true) const;
     void setMessageLimit(size_t limit);
     void queueUpdate(const QRect &area);
     Scrollbar &getScrollBar();
@@ -316,7 +317,7 @@ private:
     void updateScrollbar(const MessageLayoutSnapshot &messages,
                          bool causedByScrollbar, bool disableAnimation);
 
-    void drawMessages(QPainter &painter, const QRect &area);
+    void drawMessages(QPainter &painter, const QRegion &area);
     void setSelection(const SelectionItem &start, const SelectionItem &end);
     void setSelection(const Selection &newSelection);
     void selectWholeMessage(MessageLayout *layout, int &messageIndex);
@@ -367,8 +368,9 @@ private:
     bool lastMessageHasAlternateBackgroundReverse_ = true;
 
     /// Tracks the area of animated elements in the last full repaint.
-    /// If this is empty (QRect::isEmpty()), no animated element is shown.
-    QRect animationArea_;
+    /// Disjoint animated rows exclude the unchanged rows between them.
+    /// If empty, no animated element is shown.
+    QRegion animationArea_;
 
     bool pausable_ = false;
     QTimer pauseTimer_;
@@ -386,6 +388,8 @@ private:
     ThreadGuard snapshotGuard_;
     MessageLayoutSnapshot snapshot_;
     MessageCacheStats cacheStats_;
+    QString lastCacheLogReport_;
+    SteadyClock::time_point lastCacheLogTime_{};
 
     /// @brief The backing (internal) channel
     ///

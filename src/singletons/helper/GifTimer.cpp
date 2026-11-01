@@ -12,6 +12,12 @@
 
 namespace chatterino {
 
+void GIFTimer::advance()
+{
+    *this->position_ += GIF_FRAME_LENGTH;
+    this->signal.invoke();
+}
+
 void GIFTimer::initialize()
 {
     this->timer.setInterval(GIF_FRAME_LENGTH);
@@ -36,8 +42,7 @@ void GIFTimer::initialize()
             return;
         }
 
-        this->position_ += GIF_FRAME_LENGTH;
-        this->signal.invoke();
+        this->advance();
         getApp()->getWindows()->repaintGifEmotes();
     });
 }

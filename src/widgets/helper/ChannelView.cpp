@@ -325,7 +325,16 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
     connect(metricsTimer, &QTimer::timeout, this, [this] {
         if (getSettings()->cachePerformanceLogging && this->underlyingChannel_)
         {
-            qCInfo(messageCacheLog).noquote() << this->cacheDiagnostics();
+            const auto report = this->cacheDiagnostics(false);
+            const auto now = SteadyClock::now();
+            if (report != this->lastCacheLogReport_ ||
+                now - this->lastCacheLogTime_ >= std::chrono::minutes(5))
+            {
+                logMessageCachePerformance(report + "\n\n" +
+                                           describeMessageContentPool());
+                this->lastCacheLogReport_ = report;
+                this->lastCacheLogTime_ = now;
+            }
         }
     });
     metricsTimer->start();
@@ -445,9 +454,9 @@ void ChannelView::initializeSignals()
 
     this->signalHolder_.managedConnect(
         getApp()->getWindows()->gifRepaintRequested, [&] {
-            if (!this->animationArea_.isEmpty())
+            if (this->isVisible() && !this->animationArea_.isEmpty())
             {
-                this->queueUpdate(this->animationArea_);
+                this->update(this->animationArea_);
             }
         });
 
@@ -746,6 +755,8 @@ void ChannelView::showEvent(QShowEvent * /*event*/)
 
 void ChannelView::performLayout(bool causedByScrollbar, bool disableAnimation)
 {
+    const MessageCacheTimer timer(this->cacheStats_.layout,
+                                  getSettings()->cachePerformanceLogging);
     // BenchmarkGuard benchmark("layout");
 
     this->layoutQueued_ = false;
@@ -897,6 +908,7 @@ void ChannelView::clearMessages()
     }
     this->messagesOnScreen_.clear();
     this->snapshot_ = MessageLayoutSnapshot{};
+    this->animationArea_ = {};
     this->selection_ = {};
     this->doubleClickSelection_ = {};
     this->highlightedMessage_ = nullptr;
@@ -1022,24 +1034,39 @@ const MessageLayoutSnapshot &ChannelView::getMessagesSnapshot()
     return this->paused() ? this->snapshot_ : this->messages_.live();
 }
 
-QString ChannelView::cacheDiagnostics() const
+QString ChannelView::cacheDiagnostics(bool includeContentPool) const
 {
     auto description =
         QString("Channel: %1\nRetained view messages: %2 / %3\n%4")
             .arg(this->underlyingChannel_ ? this->underlyingChannel_->getName()
                                           : QString{})
-            .arg(this->messages_.size())
-            .arg(this->messages_.limit())
+            .arg(localizeNumbers(this->messages_.size()))
+            .arg(localizeNumbers(this->messages_.limit()))
             .arg(this->cacheStats_.describe());
+    description += QString("\nView ID: %1/%2")
+                       .arg(messageCacheSessionId())
+                       .arg(this->cacheStats_.viewId);
+    description += QString("\nViewport: %1 x %2; visible: %3; paused: %4")
+                       .arg(localizeNumbers(this->width()))
+                       .arg(localizeNumbers(this->height()))
+                       .arg(this->isVisible() ? "yes" : "no")
+                       .arg(this->paused() ? "yes" : "no");
     if (this->underlyingChannel_)
     {
-        description += QString("\nBacking channel messages: %1 / %2\n"
-                               "Message ID index entries: %3")
-                           .arg(this->underlyingChannel_->countMessages())
-                           .arg(this->underlyingChannel_->messageLimit())
-                           .arg(this->underlyingChannel_->messageIDIndexSize());
+        description +=
+            QString("\nBacking channel messages: %1 / %2\n"
+                    "Message ID index entries: %3")
+                .arg(localizeNumbers(this->underlyingChannel_->countMessages()))
+                .arg(localizeNumbers(this->underlyingChannel_->messageLimit()))
+                .arg(localizeNumbers(
+                    this->underlyingChannel_->messageIDIndexSize()));
     }
-    return description + "\n\n" + describeMessageContentPool();
+    if (includeContentPool)
+    {
+        description += "\n\n" + describeMessageContentPool();
+    }
+    return description +
+           "\n\nPerformance log: " + messageCachePerformanceLogPath();
 }
 
 void ChannelView::setMessageLimit(size_t limit)
@@ -1891,6 +1918,8 @@ bool ChannelView::scrollToServerTime(qint64 wallMs, size_t maxMessagesPerStep)
 
 void ChannelView::paintEvent(QPaintEvent *event)
 {
+    const MessageCacheTimer timer(this->cacheStats_.paint,
+                                  getSettings()->cachePerformanceLogging);
     if (this->layoutQueued_)
     {
         this->performLayout(false, this->disableLayoutAnimation_);
@@ -1902,7 +1931,7 @@ void ChannelView::paintEvent(QPaintEvent *event)
     painter.fillRect(this->rect(), this->messageColors_.channelBackground);
 
     // draw messages
-    this->drawMessages(painter, event->rect());
+    this->drawMessages(painter, event->region());
 
     // draw paused sign
     if (this->paused())
@@ -1943,7 +1972,7 @@ void ChannelView::paintEvent(QPaintEvent *event)
 
 // if overlays is false then it draws the message, if true then it draws things
 // such as the grey overlay when a message is disabled
-void ChannelView::drawMessages(QPainter &painter, const QRect &area)
+void ChannelView::drawMessages(QPainter &painter, const QRegion &area)
 {
     auto &messagesSnapshot = this->getMessagesSnapshot();
 
@@ -1951,6 +1980,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
 
     if (start >= messagesSnapshot.size())
     {
+        this->animationArea_ = {};
         return;
     }
 
@@ -1978,11 +2008,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     };
     bool showLastMessageIndicator = getSettings()->showLastMessageIndicator;
 
-    // using QRect here, because we can only request updates with a rect
-    QRect animationArea;
-    auto areaContainsY = [&area](auto y) {
-        return y >= area.y() && y < area.y() + area.height();
-    };
+    QRegion animationArea;
 
     for (; ctx.messageIndex < messagesSnapshot.size(); ++ctx.messageIndex)
     {
@@ -1997,28 +2023,14 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
             ctx.isLastReadMessage = false;
         }
 
-        if (areaContainsY(ctx.y) ||
-            areaContainsY(ctx.y + layout->getHeight()) ||
-            (ctx.y < area.y() && layout->getHeight() > area.height()))
+        const QRect messageRect(0, ctx.y, this->width(), layout->getHeight());
+        if (area.intersects(messageRect))
         {
+            ++this->cacheStats_.messagePaints;
             auto paintResult = layout->paint(ctx);
             if (paintResult.hasAnimatedElements)
             {
-                if (animationArea.isNull())
-                {
-                    animationArea = QRect{
-                        0,
-                        ctx.y,
-                        layout->getWidth(),
-                        layout->getHeight(),
-                    };
-                }
-                else
-                {
-                    animationArea.setBottom((ctx.y + layout->getHeight()));
-                    animationArea.setWidth(
-                        std::max(layout->getWidth(), animationArea.width()));
-                }
+                animationArea += messageRect;
             }
 
             if (this->highlightedMessage_ == layout)
@@ -2052,7 +2064,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     // Only update on a full repaint as some messages with animated elements
     // might get left out in partial repaints.
     // This happens for example when hovering over the go-to-bottom button.
-    if (this->height() <= area.height())
+    if ((QRegion(this->rect()) - area).isEmpty())
     {
         this->animationArea_ = animationArea;
     }
@@ -2061,8 +2073,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     {
         // shows the updated area on partial repaints
         painter.setPen(Qt::red);
-        painter.drawRect(area.x(), area.y(), area.width() - 1,
-                         area.height() - 1);
+        painter.drawRect(area.boundingRect());
     }
 #endif
 
@@ -3410,12 +3421,16 @@ void ChannelView::mouseDoubleClickEvent(QMouseEvent *event)
 
 void ChannelView::hideEvent(QHideEvent * /*event*/)
 {
+    this->animationArea_ = {};
     for (const auto &layout : this->messagesOnScreen_)
     {
         layout->deleteCache();
     }
 
     this->messagesOnScreen_.clear();
+    // Showing the tab must rebuild the geometry released above before painting,
+    // even if no messages arrive and the scroll position stays unchanged.
+    this->queueLayout();
 }
 
 void ChannelView::showUserInfoPopup(const QString &userName,

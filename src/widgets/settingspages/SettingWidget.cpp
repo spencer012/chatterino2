@@ -21,6 +21,7 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QPixmap>
 #include <QSvgRenderer>
 #include <Qt>
@@ -144,6 +145,11 @@ SettingWidget *SettingWidget::intInput(const QString &label,
     auto *lbl = new QLabel(label + ":");
 
     auto *input = new SpinBox;
+    if (params.showGroupSeparator)
+    {
+        input->setLocale(QLocale(QLocale::English, QLocale::UnitedStates));
+        input->setGroupSeparatorShown(true);
+    }
     if (params.min.has_value())
     {
         input->setMinimum(params.min.value());

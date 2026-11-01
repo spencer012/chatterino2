@@ -42,6 +42,7 @@ namespace chatterino {
 
 void MessageLayoutContainer::clearLayout()
 {
+    decltype(this->animatedElements_){}.swap(this->animatedElements_);
     decltype(this->elements_){}.swap(this->elements_);
     decltype(this->lines_){}.swap(this->lines_);
 }
@@ -49,6 +50,7 @@ void MessageLayoutContainer::clearLayout()
 void MessageLayoutContainer::beginLayout(qreal width, float scale,
                                          float imageScale, MessageFlags flags)
 {
+    this->animatedElements_.clear();
     this->elements_.clear();
     this->lines_.clear();
 
@@ -140,6 +142,13 @@ void MessageLayoutContainer::endLayout()
             }
             return a->getLine() < b->getLine();
         });
+    }
+    for (const auto &element : this->elements_)
+    {
+        if (element->hasAnimatedContent())
+        {
+            this->animatedElements_.push_back(element.get());
+        }
     }
 }
 
@@ -282,7 +291,7 @@ bool MessageLayoutContainer::paintAnimatedElements(QPainter &painter,
                                                    qreal yOffset) const
 {
     bool anyAnimatedElement = false;
-    for (const auto &element : this->elements_)
+    for (auto *element : this->animatedElements_)
     {
         anyAnimatedElement |= element->paintAnimated(painter, yOffset);
     }

@@ -13,6 +13,8 @@ set(SOURCE_FILES
         Application.hpp
         BrowserExtension.cpp
         BrowserExtension.hpp
+        debug/MessageCacheStats.cpp
+        debug/MessageCacheStats.hpp
         RunGui.cpp
         RunGui.hpp
 
