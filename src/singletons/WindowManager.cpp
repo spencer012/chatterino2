@@ -202,7 +202,12 @@ WindowManager::WindowManager(const Args &appArgs_, const Paths &paths,
     this->updateWordTypeMask();
 }
 
-WindowManager::~WindowManager() = default;
+WindowManager::~WindowManager()
+{
+    // The timer has no parent. Without this, a save queued shortly before
+    // destruction (e.g. in tests) fires later and calls a dead getApp().
+    delete this->saveTimer;
+}
 
 MessageElementFlags WindowManager::getWordFlags()
 {
