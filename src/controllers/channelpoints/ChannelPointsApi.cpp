@@ -141,6 +141,20 @@ QString generateHermesId()
     return randomAlphanumeric(21);
 }
 
+QString flattenLineBreaks(const QString &text)
+{
+    static const QRegularExpression lineBreaks(
+        QStringLiteral(R"([ \t]*[\r\n\v\f\x{2028}\x{2029}][\s\x{2028}\x{2029}]*)"));
+    auto out = text;
+    out.replace(lineBreaks, QStringLiteral(" "));
+    return out;
+}
+
+QString normalizeRedeemInput(const QString &text)
+{
+    return flattenLineBreaks(text).trimmed();
+}
+
 QDateTime parseTwitchTime(const QString &value)
 {
     if (value.isEmpty())

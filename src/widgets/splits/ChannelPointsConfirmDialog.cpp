@@ -4,6 +4,7 @@
 
 #include "widgets/splits/ChannelPointsConfirmDialog.hpp"
 
+#include "controllers/channelpoints/ChannelPointsApi.hpp"
 #include "widgets/splits/ChannelPointsFormat.hpp"
 
 #include <QApplication>
@@ -12,6 +13,7 @@
 #include <QFrame>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMimeData>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSyntaxHighlighter>
@@ -22,12 +24,32 @@
 
 namespace {
 
-constexpr int REDEEM_INPUT_SOFT_LIMIT = 500;
+using chatterino::channelpoints::flattenLineBreaks;
+using chatterino::channelpoints::MAX_REDEEM_INPUT_LENGTH;
+using chatterino::channelpoints::normalizeRedeemInput;
 
 const QColor WARNING_COLOR("#e0b84f");
 const QColor ERROR_COLOR("#e5675f");
 
-/// Highlights text past Twitch's soft limit instead of cutting it off.
+/// Text box for the reward message. Twitch posts the message to chat, which
+/// is a single line, so line breaks in pasted text become spaces. (Enter
+/// itself confirms the dialog.)
+class RedeemInputEdit final : public QTextEdit
+{
+public:
+    using QTextEdit::QTextEdit;
+
+protected:
+    void insertFromMimeData(const QMimeData *source) override
+    {
+        if (source->hasText())
+        {
+            this->insertPlainText(flattenLineBreaks(source->text()));
+        }
+    }
+};
+
+/// Highlights text past Twitch's limit instead of cutting it off.
 class RedeemInputHighlighter final : public QSyntaxHighlighter
 {
 public:
@@ -42,13 +64,13 @@ protected:
     void highlightBlock(const QString &text) override
     {
         const auto blockStart = this->currentBlock().position();
-        if (blockStart >= REDEEM_INPUT_SOFT_LIMIT)
+        if (blockStart >= MAX_REDEEM_INPUT_LENGTH)
         {
             this->setFormat(0, int(text.size()), this->overLimitFormat_);
             return;
         }
 
-        const auto overLimitStart = REDEEM_INPUT_SOFT_LIMIT - blockStart;
+        const auto overLimitStart = MAX_REDEEM_INPUT_LENGTH - blockStart;
         if (overLimitStart < text.size())
         {
             this->setFormat(overLimitStart, int(text.size()) - overLimitStart,
@@ -123,7 +145,7 @@ ChannelPointsConfirmDialog::ChannelPointsConfirmDialog(
     if (view.reward.isUserInputRequired)
     {
         layout->addSpacing(6);
-        this->inputEdit_ = new QTextEdit(this);
+        this->inputEdit_ = new RedeemInputEdit(this);
         this->inputEdit_->setPlaceholderText("Your message");
         this->inputEdit_->setAcceptRichText(false);
         this->inputEdit_->setTabChangesFocus(true);
@@ -337,10 +359,14 @@ void ChannelPointsConfirmDialog::updateUi()
     }
 
     bool canConfirm = !this->view_.inFlight;
-    if (this->inputEdit_ != nullptr &&
-        this->inputEdit_->toPlainText().trimmed().isEmpty())
+    if (this->inputEdit_ != nullptr)
     {
-        canConfirm = false;
+        const auto size =
+            normalizeRedeemInput(this->inputEdit_->toPlainText()).size();
+        if (size == 0)
+        {
+            canConfirm = false;
+        }
     }
     if (mode == ChannelPointQueueMode::None && !ready)
     {
@@ -359,15 +385,16 @@ void ChannelPointsConfirmDialog::updateInputInfo()
         return;
     }
 
-    const auto size = this->inputEdit_->toPlainText().size();
-    if (size > REDEEM_INPUT_SOFT_LIMIT)
+    const auto size =
+        normalizeRedeemInput(this->inputEdit_->toPlainText()).size();
+    if (size > MAX_REDEEM_INPUT_LENGTH)
     {
         this->inputInfoLabel_->setStyleSheet(
             QStringLiteral("color: %1").arg(colorCss(WARNING_COLOR)));
         this->inputInfoLabel_->setText(
             QStringLiteral("%1 / %2, Twitch may cut the rest")
                 .arg(size)
-                .arg(REDEEM_INPUT_SOFT_LIMIT));
+                .arg(MAX_REDEEM_INPUT_LENGTH));
         return;
     }
 
@@ -376,7 +403,7 @@ void ChannelPointsConfirmDialog::updateInputInfo()
     this->inputInfoLabel_->setStyleSheet(
         QStringLiteral("color: %1").arg(colorCss(dim)));
     this->inputInfoLabel_->setText(
-        QStringLiteral("%1 / %2").arg(size).arg(REDEEM_INPUT_SOFT_LIMIT));
+        QStringLiteral("%1 / %2").arg(size).arg(MAX_REDEEM_INPUT_LENGTH));
 }
 
 void ChannelPointsConfirmDialog::keyPressEvent(QKeyEvent *event)
@@ -425,7 +452,8 @@ void ChannelPointsConfirmDialog::confirm()
         QApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
     const auto inputText = this->inputEdit_ == nullptr
                                ? QString()
-                               : this->inputEdit_->toPlainText().trimmed();
+                               : normalizeRedeemInput(
+                                     this->inputEdit_->toPlainText());
 
     Q_EMIT this->confirmed(this->view_.reward.id, this->selectedMode(),
                            inputText, this->view_.reward.cost);
