@@ -7,6 +7,8 @@
 #include "controllers/highlights/HighlightBlacklistModel.hpp"
 #include "controllers/highlights/HighlightBlacklistUser.hpp"
 #include "controllers/highlights/HighlightController.hpp"
+#include "controllers/highlights/Model.hpp"
+#include "controllers/highlights/types/AnyHighlight.hpp"  // IWYU pragma: keep
 #include "singletons/Settings.hpp"
 #include "util/LayoutCreator.hpp"
 #include "widgets/helper/EditableModelView.hpp"
@@ -30,7 +32,9 @@ HighlightingPage::HighlightingPage()
         auto tabs = layout.emplace<QTabWidget>();
         {
             // HIGHLIGHTS
-            tabs->addTab(new HighlightingWidget, "Highlights");
+            auto *highlightsWidget = new HighlightingWidget;
+            this->highlightsView_ = highlightsWidget->findChild<QTableView *>();
+            tabs->addTab(highlightsWidget, "Highlights");
 
             auto disabledUsers =
                 tabs.appendTab(new QVBoxLayout, "Blacklisted Users");
@@ -75,6 +79,29 @@ HighlightingPage::HighlightingPage()
             "Flash taskbar only stops highlighting when Chatterino is focused",
             getSettings()->longAlerts));
     }
+}
+
+bool HighlightingPage::filterElements(const QString &query)
+{
+    const auto pageMatch = SettingsPage::filterElements(query);
+
+    if (this->highlightsView_ == nullptr)
+    {
+        return pageMatch;
+    }
+
+    auto *model = this->highlightsView_->model();
+    bool rowMatch = false;
+    for (int row = 0; row < model->rowCount(); row++)
+    {
+        const auto name =
+            model->index(row, highlights::Model::Column::Name).data().toString();
+        const auto match = name.contains(query, Qt::CaseInsensitive);
+        rowMatch |= match;
+        this->highlightsView_->setRowHidden(row, !match);
+    }
+
+    return pageMatch || rowMatch;
 }
 
 }  // namespace chatterino
