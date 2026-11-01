@@ -10,6 +10,7 @@
 #include <QString>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 
@@ -23,6 +24,12 @@ inline const QLoggingCategory &messageCacheLog()
 
 QString messageCachePerformanceLogPath();
 void logMessageCachePerformance(const QString &report);
+/// Batch reports and write them on a worker. Call from the GUI thread.
+void queueMessageCachePerformance(const QString &report);
+void initializeMessageCachePerformance();
+void recordImageLayoutInvalidation();
+void recordMessageLayoutBuild();
+uint64_t messageLayoutBuildCount();
 uint64_t nextMessageCacheViewId();
 const QString &messageCacheSessionId();
 
@@ -30,6 +37,51 @@ struct MessageCacheTiming {
     uint64_t calls = 0;
     uint64_t nanoseconds = 0;
     uint64_t maximumNanoseconds = 0;
+    uint64_t intervalCalls = 0;
+    uint64_t intervalNanoseconds = 0;
+    uint64_t intervalMaximumNanoseconds = 0;
+    std::array<uint64_t, 5> intervalSlowCalls{};
+
+    void record(uint64_t elapsed)
+    {
+        ++this->calls;
+        this->nanoseconds += elapsed;
+        this->maximumNanoseconds = std::max(this->maximumNanoseconds, elapsed);
+        ++this->intervalCalls;
+        this->intervalNanoseconds += elapsed;
+        this->intervalMaximumNanoseconds =
+            std::max(this->intervalMaximumNanoseconds, elapsed);
+        constexpr std::array<uint64_t, 5> limits{8, 16, 50, 100, 250};
+        for (size_t i = 0; i < limits.size(); ++i)
+        {
+            this->intervalSlowCalls[i] += elapsed > limits[i] * 1000000;
+        }
+    }
+
+    void resetInterval()
+    {
+        this->intervalCalls = 0;
+        this->intervalNanoseconds = 0;
+        this->intervalMaximumNanoseconds = 0;
+        this->intervalSlowCalls.fill(0);
+    }
+
+    QString describeInterval(const QString &name) const
+    {
+        return QString("%1 interval: %2 calls; total %3 ms; max %4 ms; "
+                       "over 8/16/50/100/250 ms: %5/%6/%7/%8/%9")
+            .arg(name)
+            .arg(localizeNumbers(this->intervalCalls))
+            .arg(QLocale().toString(this->intervalNanoseconds / 1000000.0, 'f',
+                                    3))
+            .arg(QLocale().toString(
+                this->intervalMaximumNanoseconds / 1000000.0, 'f', 3))
+            .arg(localizeNumbers(this->intervalSlowCalls[0]))
+            .arg(localizeNumbers(this->intervalSlowCalls[1]))
+            .arg(localizeNumbers(this->intervalSlowCalls[2]))
+            .arg(localizeNumbers(this->intervalSlowCalls[3]))
+            .arg(localizeNumbers(this->intervalSlowCalls[4]));
+    }
 
     QString describe(const QString &name) const
     {
@@ -69,10 +121,7 @@ public:
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - this->start_)
                     .count());
-            ++this->timing_->calls;
-            this->timing_->nanoseconds += elapsed;
-            this->timing_->maximumNanoseconds =
-                std::max(this->timing_->maximumNanoseconds, elapsed);
+            this->timing_->record(elapsed);
         }
     }
 
@@ -117,8 +166,11 @@ struct MessageCacheStats {
                "\nMessage rows painted: " +
                localizeNumbers(this->messagePaints) + "\n" +
                this->layout.describe("Layout wall time") + "\n" +
-               this->paint.describe("Paint wall time") +
-               "\nTimings are cumulative while logging is enabled. "
+               this->paint.describe("Paint wall time") + "\n" +
+               this->layout.describeInterval("Layout") + "\n" +
+               this->paint.describeInterval("Paint") +
+               "\nWall-time totals are cumulative while logging is enabled; "
+               "interval counters reset after each periodic sample. "
                "Paint includes layout performed during painting; do not add "
                "the totals.";
     }

@@ -37,6 +37,14 @@ benchmarks instead. Use a GitHub noreply author address for new commits.
 - `ChannelView` preserves disjoint repaint regions for animated message rows and
   rebuilds released geometry when a hidden tab is shown again. Preserve both the
   partial-repaint and hide/show regression tests when merging upstream changes.
+- Keep a bounded measurement-geometry working set in `ChannelView` for scrollbar,
+  wheel and replay probes. Releasing it after every probe causes repeated shaping
+  during smooth scrolling. Drop offscreen pixmaps; trim geometry after painting
+  and release the set on hide or clear.
+- Image-load invalidations batch over 20 ms. Periodic diagnostics batch over
+  100 ms and write on a worker with bounded pending storage. Preserve per-report
+  paint/layout spike counters and the shared event-loop-delay monitor; cumulative
+  maxima alone hide later stalls below a startup peak.
 - Details and probes are documented in `docs/message-cache-controls.md` and
   `docs/message-cache-performance.md`; tests cover images, layouts and channels.
 

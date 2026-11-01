@@ -6,6 +6,7 @@
 
 #include "Application.hpp"
 #include "controllers/highlights/types/AutomodCaughtHighlight.hpp"
+#include "debug/MessageCacheStats.hpp"
 #include "messages/layouts/MessageLayoutContainer.hpp"
 #include "messages/layouts/MessageLayoutContext.hpp"
 #include "messages/layouts/MessageLayoutElement.hpp"
@@ -131,6 +132,7 @@ bool MessageLayout::layout(const MessageLayoutContext &ctx,
 
 void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
 {
+    recordMessageLayoutBuild();
 #ifdef FOURTF
     this->layoutCount_++;
 #endif

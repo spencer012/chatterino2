@@ -42,9 +42,17 @@ Earlier builds emitted only the console report and did not save it to a file.
 Paint and layout call counts, total wall time, mean and maximum are collected
 only while logging is enabled. Paint can include a layout, so their totals
 overlap and should not be added together. Timings do not measure total CPU usage,
-message parsing or operating-system composition. Counters are cumulative for the
-view's lifetime; retained-message counts describe the current live cache. The
-report does not include chat text or usernames of message authors.
+message parsing or operating-system composition. Totals are cumulative; separate
+interval maxima and counts over 8/16/50/100/250 ms reset at each periodic sample.
+Retained-message counts describe the current live cache. The report does not
+include chat text or usernames of message authors.
+
+Reports are batched for 100 ms and written on a worker so console output and disk
+flushes do not block chat rendering. Global runtime counters appear once per
+batch, including event-loop delays beyond a shared 50 ms timer interval, geometry
+builds, image-load invalidations and the previous log-write duration. Timer delay
+can include OS scheduling or suspend/resume. See
+[rendering diagnostics](message-cache-rendering.md) for measurement limits.
 
 Each report includes a session and view ID so multiple splits for the same
 channel remain distinguishable. Unchanged views log a heartbeat every five
@@ -65,10 +73,13 @@ owned copy is needed only when pausing. Message ingestion and the backing channe
 still use the thread-safe queue. Layout requests within an event-loop turn are
 coalesced. Painting cleans up only the current and previous viewport ranges.
 
-Detailed geometry is released when a message leaves the viewport. Measured
-heights remain available for scrolling, and geometry is rebuilt for rendering or
-copying a selection. Scrollbar markers use a sparse index and cached transparent
-layer, so moving the thumb does not rescan every cached message.
+Offscreen drawing buffers are released. A bounded working set of up to 256
+scrollbar, wheel and replay measurement layouts keeps its geometry across scroll
+frames; other offscreen geometry is released. Hiding or clearing a view releases
+that working set too. Measured heights remain available for scrolling, and
+released geometry is rebuilt for rendering or copying a selection. Scrollbar
+markers use a sparse index and cached transparent layer, so moving the thumb
+does not rescan every cached message.
 
 Replay timestamps are appended and evicted using stable sequence numbers rather
 than rebuilding the whole index when a full ring advances. Replacements, history

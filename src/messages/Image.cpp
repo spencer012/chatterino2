@@ -12,6 +12,7 @@
 #include "controllers/emotes/EmoteController.hpp"
 #include "debug/AssertInGuiThread.hpp"
 #include "debug/Benchmark.hpp"
+#include "debug/MessageCacheStats.hpp"
 #include "singletons/helper/GifTimer.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/DebugCount.hpp"
@@ -294,19 +295,18 @@ void assignFrames(std::weak_ptr<Image> weak, QList<Frame> parsed)
         if (!isPushQueued)
         {
             isPushQueued = true;
-            // We don't use postToThread here, because that would run immediately.
-            // We explicitly want to queue a callback after the current ones.
-            QMetaObject::invokeMethod(
-                qApp,
-                [] {
-                    isPushQueued = false;
-                    auto *app = tryGetApp();
-                    if (app != nullptr)
-                    {
-                        app->getWindows()->forceLayoutChannelViews();
-                    }
-                },
-                Qt::QueuedConnection);
+            // Decode completions often arrive in adjacent event-loop turns.
+            // Batch them across a frame instead of reshaping every visible
+            // message once for each completion.
+            QTimer::singleShot(20, qApp, [] {
+                isPushQueued = false;
+                auto *app = tryGetApp();
+                if (app != nullptr)
+                {
+                    recordImageLayoutInvalidation();
+                    app->getWindows()->forceLayoutChannelViews();
+                }
+            });
         }
     };
 

@@ -318,6 +318,8 @@ private:
                          bool causedByScrollbar, bool disableAnimation);
 
     void drawMessages(QPainter &painter, const QRegion &area);
+    void retainMeasuredLayout(const MessageLayoutPtr &layout);
+    void clearMeasuredLayouts();
     void setSelection(const SelectionItem &start, const SelectionItem &end);
     void setSelection(const Selection &newSelection);
     void selectWholeMessage(MessageLayout *layout, int &messageIndex);
@@ -487,6 +489,10 @@ private:
     pajlada::Signals::SignalHolder channelConnections_;
 
     std::unordered_set<std::shared_ptr<MessageLayout>> messagesOnScreen_;
+    // Scrollbar and wheel measurements are reused across animation frames.
+    // Trim after painting, when the current visible set is known.
+    std::unordered_set<MessageLayoutPtr> measuredLayouts_;
+    std::deque<MessageLayoutPtr> measuredLayoutOrder_;
 
     MessageColors messageColors_;
     MessagePreferences messagePreferences_;
