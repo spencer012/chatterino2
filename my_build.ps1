@@ -4,11 +4,15 @@ param(
 
     [switch] $Configure,
     [switch] $Clean,
+    # Launch the new build. If it's already running, close that instance first.
     [switch] $Run,
-    [switch] $WaitForCopy,
-
-    [int] $CopyTimeoutMinutes = 5,
-    [int] $CopyRetrySeconds = 5
+    # Build and run the unit tests (chatterino-test) instead of the app.
+    [switch] $Tests,
+    # gtest filter for -Tests, e.g. "ChannelEvents.*:ChannelPoints.*".
+    [string] $TestFilter = "",
+    # Also run the tests that need the local mock servers (httpbox on 9051,
+    # PubSub/websocket servers on 9050/9052) even if they aren't running.
+    [switch] $AllTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,40 +52,57 @@ if (Test-FileLocked $exePath) {
     Write-Error "Cannot build because $exePath is locked. Close that Chatterino instance once, then use -Run to launch $runExePath for future runs."
 }
 
-function Copy-WithRetry {
+function Update-RunExe {
     param(
         [string] $Source,
-        [string] $Destination,
-        [int] $TimeoutMinutes,
-        [int] $RetrySeconds,
-        [bool] $Wait
+        [string] $Destination
     )
 
     if (-not (Test-Path $Source)) {
         throw "Build output not found: $Source"
     }
 
-    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    # Windows can't overwrite a running exe, but it can rename one. Stage the
+    # new build next to it, move the running one aside, then swap the new one
+    # in. A running Chatterino keeps going; the next launch gets the new build.
+    $dir = Split-Path $Destination
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($Destination)
+    $staged = Join-Path $dir "$name.new.exe"
+    $old = Join-Path $dir "$name.old.exe"
 
-    while ($true) {
-        if (-not (Test-FileLocked $Destination)) {
-            Copy-Item -Path $Source -Destination $Destination -Force
-            Write-Host "Copied build output to $Destination"
-            return $true
-        }
+    Copy-Item -Path $Source -Destination $staged -Force
 
-        if (-not $Wait) {
-            Write-Warning "$Destination is locked. Skipping run-copy update; use -WaitForCopy to wait and retry."
+    # Left over from the last swap. Still locked if that build is running.
+    if ((Test-Path $old) -and -not (Test-FileLocked $old)) {
+        Remove-Item $old -Force
+    }
+
+    if (Test-Path $Destination) {
+        if (Test-Path $old) {
+            # Both the previous and the current build are running.
+            Remove-Item $staged -Force
+            Write-Warning "Two older builds are still running ($Destination and $old). Close one and build again."
             return $false
         }
-
-        if ((Get-Date) -ge $deadline) {
-            Write-Error "Timed out after $TimeoutMinutes minute(s) waiting to copy over locked file: $Destination"
-        }
-
-        Write-Host "$Destination is locked. Retrying in $RetrySeconds second(s)..."
-        Start-Sleep -Seconds $RetrySeconds
+        Move-Item -Path $Destination -Destination $old
     }
+    Move-Item -Path $staged -Destination $Destination
+
+    if (Test-Path $old) {
+        Write-Host "Updated $Destination (the running instance keeps the previous build until restarted)"
+    } else {
+        Write-Host "Updated $Destination"
+    }
+    return $true
+}
+
+function Get-RunExeProcesses {
+    param([string] $Path)
+
+    $dir = Split-Path $Path
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($Path)
+    Get-Process -Name $name, "$name.old" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and (Split-Path $_.Path) -eq $dir }
 }
 
 $commands = @()
@@ -94,7 +115,51 @@ if ($Clean) {
     $commands += "nmake clean"
 }
 
-$commands += "nmake"
+if ($Tests) {
+    # BUILD_TESTS is off by default upstream; enabling it only adds the
+    # chatterino-test target, normal builds below still only build the app.
+    $commands += "cmake -DBUILD_TESTS=On ."
+    $commands += "nmake chatterino-test"
+    $commands += "cd /d `"$buildDir\bin`""
+    # Tests that talk to the local mock servers (httpbox, websocket echo,
+    # PubSub). Without the servers they fail slowly (a missing httpbox makes
+    # some wait 2 minutes each) and the Lua HTTP test aborts the whole run.
+    $serverTests = @(
+        "NetworkRequest.*",
+        "PluginTest.testHttp",
+        "PluginTest.testTcpWebSocket",
+        "PluginTest.testTlsWebSocket",
+        "WebSocketPool.tcpEcho",
+        "WebSocketPool.tlsEcho",
+        "TwitchPubSubClient.*",
+        "BasicPubSub.*",
+        "SeventvEventAPI.*",
+        "BttvLiveUpdates.*"
+    )
+    $httpbox = New-Object System.Net.Sockets.TcpClient
+    $serversUp = $false
+    try {
+        $serversUp = $httpbox.ConnectAsync("127.0.0.1", 9051).Wait(300)
+    } catch {
+        $serversUp = $false
+    } finally {
+        $httpbox.Dispose()
+    }
+
+    $filter = $TestFilter
+    if (-not $AllTests -and -not $serversUp) {
+        Write-Host "Mock servers not running on 127.0.0.1:9051, skipping: $($serverTests -join ', ') (use -AllTests to run them anyway)"
+        $positive = if ($filter) { $filter } else { "*" }
+        $filter = "$positive-$($serverTests -join ':')"
+    }
+    if ($filter) {
+        $commands += ".\chatterino-test.exe --gtest_filter=`"$filter`""
+    } else {
+        $commands += ".\chatterino-test.exe"
+    }
+} else {
+    $commands += "nmake chatterino"
+}
 
 $cmd = "`"$vcvars`" && cd /d `"$buildDir`" && " + ($commands -join " && ")
 & cmd.exe /d /s /c $cmd
@@ -103,12 +168,30 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$copiedRunExe = Copy-WithRetry -Source $exePath -Destination $runExePath -TimeoutMinutes $CopyTimeoutMinutes -RetrySeconds $CopyRetrySeconds -Wait:$WaitForCopy
+if ($Tests) {
+    exit 0
+}
+
+$updated = Update-RunExe -Source $exePath -Destination $runExePath
 
 if ($Run) {
-    if (-not $copiedRunExe) {
-        Write-Warning "Not launching because $runExePath was locked and was not updated."
+    if (-not $updated) {
+        Write-Warning "Not launching because $runExePath was not updated."
         exit 0
+    }
+
+    $running = @(Get-RunExeProcesses $runExePath)
+    if ($running.Count -gt 0) {
+        Write-Host "Closing the running Chatterino..."
+        foreach ($process in $running) {
+            [void] $process.CloseMainWindow()
+        }
+        foreach ($process in $running) {
+            if (-not $process.WaitForExit(15000)) {
+                Write-Warning "Chatterino (pid $($process.Id)) didn't close within 15s; not launching a second instance."
+                exit 0
+            }
+        }
     }
 
     $env:QT_WIN_DEBUG_CONSOLE = "new"
