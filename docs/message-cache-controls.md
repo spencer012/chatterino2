@@ -25,6 +25,12 @@ Choose **Channel history > Cache diagnostics...** for a selectable report of:
 - The backing channel's message-ID index size. This index is built lazily for
   lookups on histories of at least 10,000 messages.
 
+The report opens in a nonmodal, scrollable window so a long report cannot block
+chat input or force an oversized message box. **Copy report** copies the complete
+snapshot. Reopening the menu action refreshes an already open report. Snapshot
+generation time is shown at the bottom to distinguish data collection from
+window presentation delays.
+
 Enable **Log cache performance every 30 seconds** in that menu, or the matching
 General setting, to save timestamped reports to
 `Misc/message-cache-performance.log` in Chatterino's data folder. The full path

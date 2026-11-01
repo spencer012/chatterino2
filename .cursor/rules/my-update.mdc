@@ -25,6 +25,9 @@ benchmarks instead. Use a GitHub noreply author address for new commits.
   reports under `Misc/message-cache-performance.log`. Reports include stable
   session/view IDs, paint/layout timings, painted-row counts and content-pool
   savings. Unchanged views use a five-minute heartbeat to reduce duplicate output.
+- `widgets/dialogs/CacheDiagnosticsDialog.hpp/.cpp` shows a scrollable, nonmodal
+  report with Copy report. Keep diagnostics out of `QMessageBox::exec()`: the long
+  report could block chat input while the native/auto-sized message box opened.
 - `GifTimer` provides a shared 64-bit animation clock; `Image::Frames` computes
   the current frame only on demand. Do not restore per-image timer subscriptions,
   which made every offscreen loaded animation do work at 50 ticks per second.

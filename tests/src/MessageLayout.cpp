@@ -22,6 +22,7 @@
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "Test.hpp"
+#include "widgets/dialogs/CacheDiagnosticsDialog.hpp"
 #include "widgets/helper/ChannelView.hpp"
 
 #include <QApplication>
@@ -237,6 +238,33 @@ TEST(MessageCachePerformance, PaintAndLayoutTimingsFollowLoggingSetting)
     report = view.cacheDiagnostics();
     EXPECT_FALSE(report.contains("Layout wall time: 0 calls"));
     EXPECT_FALSE(report.contains("Paint wall time: 0 calls"));
+}
+
+TEST(MessageCachePerformance, LargeDiagnosticsWindowIsScrollableAndNonmodal)
+{
+    MockApplication app;
+    QWidget parent;
+    parent.resize(300, 200);
+    parent.show();
+    const auto report =
+        QString("Channel: test\nValue: 1,000,000\n").repeated(1000);
+    QElapsedTimer elapsed;
+    elapsed.start();
+    CacheDiagnosticsDialog dialog(report, &parent);
+    dialog.show();
+    QCoreApplication::processEvents();
+    auto *text = dialog.findChild<QPlainTextEdit *>();
+    ASSERT_NE(text, nullptr);
+    EXPECT_EQ(text->toPlainText(), report);
+    EXPECT_TRUE(text->isReadOnly());
+    EXPECT_GT(text->verticalScrollBar()->maximum(), 0);
+    EXPECT_FALSE(dialog.isModal());
+    EXPECT_NE(QApplication::activeModalWidget(), &dialog);
+    EXPECT_TRUE(parent.isEnabled());
+    EXPECT_LE(dialog.height(), 640);
+    EXPECT_LT(elapsed.elapsed(), 5000);
+    dialog.setReport("updated snapshot");
+    EXPECT_EQ(text->toPlainText(), "updated snapshot");
 }
 
 TEST(ChannelViewHistory, PauseWrapResizeAndClearPreserveIdentity)

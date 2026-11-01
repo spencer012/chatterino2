@@ -13,6 +13,7 @@
 #include <QElapsedTimer>
 #include <QMenu>
 #include <QPoint>
+#include <QPointer>
 
 #include <memory>
 #include <vector>
@@ -24,6 +25,7 @@ class DrawnButton;
 class LabelButton;
 class Label;
 class Split;
+class CacheDiagnosticsDialog;
 
 class SplitHeader final : public BaseWidget
 {
@@ -67,6 +69,7 @@ private:
     void handleChannelChanged();
 
     Split *const split_{};
+    QPointer<CacheDiagnosticsDialog> cacheDiagnosticsDialog_;
     QString tooltipText_{};
     TooltipWidget *const tooltipWidget_{};
     bool isLive_{false};
