@@ -256,6 +256,9 @@ public:
     PopupCycleFixture()
         : input(this->split.getInput())
     {
+        // Settings persist across tests in one process, and an earlier test
+        // leaves this off. These tests expect the default.
+        this->app.settings.mentionUsersWithComma = true;
     }
 
     void setChannel(ChannelPtr channel)

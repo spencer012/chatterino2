@@ -35,6 +35,10 @@ int main(int argc, char **argv)
 
 #ifdef SUPPORT_QT_NETWORK_TESTS
     QApplication app(argc, argv);
+    // Tests show and destroy top-level widgets (e.g. a Split). Closing the last
+    // one would quit the app, after which every QEventLoop::exec() in later
+    // tests returns immediately.
+    QApplication::setQuitOnLastWindowClosed(false);
     // make sure to always debug-log
     QLoggingCategory::setFilterRules("chatterino.*=true");
     // make sure we use the same language when formatting

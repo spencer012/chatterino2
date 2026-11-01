@@ -8,7 +8,7 @@
 #include "common/Literals.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/highlights/HighlightController.hpp"
-#include "controllers/highlights/types/MessageHighlight.hpp"
+#include "controllers/highlights/types/AnyHighlight.hpp"  // IWYU pragma: keep
 #include "controllers/ignores/IgnorePhrase.hpp"
 #include "controllers/sound/NullBackend.hpp"
 #include "lib/Snapshot.hpp"
@@ -767,7 +767,8 @@ protected:
 
     MessagePtr parsePrivmsg(const QString &body)
     {
-        VectorMessageSink sink;
+        // Live channel traits, so highlights are added to /mentions.
+        VectorMessageSink sink(this->channel->sinkTraits());
         const auto payload =
             QString("@badge-info=;badges=;color=#1E90FF;display-name=OtherUser;"
                     "emotes=;id=1;mod=0;room-id=11148817;subscriber=0;"
@@ -800,13 +801,18 @@ protected:
 
 namespace {
 
-/// Message highlight on "hello" that shows in mentions and plays no sound.
+/// Message highlight on "hello" that shows in mentions, plays no sound and
+/// sends no alert (this mock application has no window manager to alert).
 void addHelloHighlight()
 {
     highlights::MessageHighlight highlight{u"test-hello"};
     highlight.setPattern("hello");
     highlight.outcome.setSound("");
+    highlight.outcome.alert = false;
     getSettings()->sharedHighlights.append(highlight);
+    // The highlight controller rebuilds on this debounced (100ms) signal,
+    // fire it now instead of waiting for the timer.
+    getSettings()->sharedHighlights.delayedItemsChanged.invoke();
 }
 
 }  // namespace
