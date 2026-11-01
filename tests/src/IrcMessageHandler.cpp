@@ -34,6 +34,7 @@
 #include "Test.hpp"
 #include "util/IrcHelpers.hpp"
 #include "util/VectorMessageSink.hpp"
+#include "widgets/helper/ScrollbarHighlight.hpp"
 
 #include <IrcConnection>
 #include <QDebug>
@@ -750,7 +751,8 @@ class TestIrcMessageHandlerFocused : public ::testing::Test
 protected:
     void SetUp() override
     {
-        this->mockApplication = std::make_unique<MockApplication>();
+        this->mockApplication = std::make_unique<MockApplication>(
+            QString::fromUtf8(SETTINGS_DEFAULT));
         this->channel = std::make_shared<TwitchChannel>(u"pajlada"_s);
         this->mockApplication->twitch.mockChannels.emplace("pajlada",
                                                            this->channel);

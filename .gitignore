@@ -128,3 +128,12 @@ aqtinstall.log
 
 
 my_build.md
+
+# Local chat/performance investigations can reveal session activity and paths.
+message-cache-performance.log*
+channel-points.log*
+/benchmarks/results/message-content-pool-*.json
+/benchmarks/results/message-dedup-*.json
+/benchmarks/results/cache-render-performance-*.json
+/benchmarks/results/cache-render-performance-*.html
+/docs/message-cache-speed-review-*.md

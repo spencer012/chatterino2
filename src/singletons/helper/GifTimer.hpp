@@ -7,6 +7,9 @@
 #include <pajlada/signals/signal.hpp>
 #include <QTimer>
 
+#include <cstdint>
+#include <memory>
+
 namespace chatterino {
 
 constexpr long unsigned GIF_FRAME_LENGTH = 20;
@@ -17,10 +20,19 @@ public:
     void initialize();
 
     pajlada::Signals::NoArgSignal signal;
-    long unsigned position()
+    std::uint64_t position() const
+    {
+        return *this->position_;
+    }
+
+    /// Images read this shared clock only when their current frame is needed.
+    /// Keeping the clock alive also makes frames safe after the timer dies.
+    std::shared_ptr<const std::uint64_t> clock() const
     {
         return this->position_;
     }
+
+    void advance();
 
     void registerOpenOverlayWindow()
     {
@@ -35,7 +47,8 @@ public:
 
 private:
     QTimer timer;
-    long unsigned position_{};
+    std::shared_ptr<std::uint64_t> position_ =
+        std::make_shared<std::uint64_t>(0);
     size_t openOverlayWindows_ = 0;
 };
 

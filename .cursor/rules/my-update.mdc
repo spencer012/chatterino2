@@ -3,6 +3,40 @@ description: Custom fork documentation - tracks custom features and modified fil
 alwaysApply: true
 ---
 
+## Delivery and privacy
+
+Commit and push completed requested updates to the fork's current branch unless
+the user directs otherwise. Keep unrelated work out of those commits. Audit the
+entire outgoing commit range before pushing, including unpublished history.
+Exclude credentials, personal filesystem paths, raw logs, local session reports
+and log-derived channel/activity data. Publish generic documentation and synthetic
+benchmarks instead. Use a GitHub noreply author address for new commits.
+
+## Large-history cache and rendering performance
+
+- `Channel`, `LimitedQueue` and `MessageViewQueue` support live per-channel history
+  limits, borrowed GUI-ring reads, frozen pause snapshots, bounded similarity
+  tails and a lazy message-ID index. Split header > Channel history is below More.
+- `MessageContentPool` shares immutable Qt text/word-list payloads, including text
+  in emote-bearing messages. Occurrence identity, emote elements and layouts stay
+  independent. Its toggle and retained/cumulative accounting allow evaluation and
+  rollback separately from the general cache changes.
+- `debug/MessageCacheStats.hpp/.cpp` and `ChannelView` save rotating performance
+  reports under `Misc/message-cache-performance.log`. Reports include stable
+  session/view IDs, paint/layout timings, painted-row counts and content-pool
+  savings. Unchanged views use a five-minute heartbeat to reduce duplicate output.
+- `GifTimer` provides a shared 64-bit animation clock; `Image::Frames` computes
+  the current frame only on demand. Do not restore per-image timer subscriptions,
+  which made every offscreen loaded animation do work at 50 ticks per second.
+- `MessageLayoutContainer` builds an animation-only element index after final
+  layout ordering. Clear it when releasing or rebuilding geometry. Image loading
+  forces a new layout generation, which refreshes the index.
+- `ChannelView` preserves disjoint repaint regions for animated message rows and
+  rebuilds released geometry when a hidden tab is shown again. Preserve both the
+  partial-repaint and hide/show regression tests when merging upstream changes.
+- Details and probes are documented in `docs/message-cache-controls.md` and
+  `docs/message-cache-performance.md`; tests cover images, layouts and channels.
+
 This is a fork of an existing open source project with some custom functionality that was implemented for my use. Document the general status of each of them here to expedite future merge conflicts and to harden against future changes. When creating a new feature, make sure to add it to `.cursor\rules\my-update.mdc` and keep it up to date 
 
 1. **Chat History / Reverse Search (Ctrl+R)**

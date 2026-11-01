@@ -54,6 +54,9 @@ public:
         /// The suffix appended to the end of the displayed value.
         /// Leave empty for no suffix.
         std::optional<QString> suffix;
+
+        /// Display thousands separators in the input.
+        bool showGroupSeparator = false;
     };
 
     ~SettingWidget() override = default;

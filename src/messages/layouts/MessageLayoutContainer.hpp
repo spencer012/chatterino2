@@ -378,6 +378,7 @@ private:
     TextDirection textDirection_ = TextDirection::Neutral;
 
     std::vector<std::unique_ptr<MessageLayoutElement>> elements_;
+    std::vector<MessageLayoutElement *> animatedElements_;
 
     /**
      * A list of lines covering this message

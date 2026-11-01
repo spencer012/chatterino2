@@ -63,6 +63,11 @@ public:
                        const MessageColors &messageColors) = 0;
     /// @returns true if anything was painted
     virtual bool paintAnimated(QPainter &painter, qreal yOffset) = 0;
+    /// Evaluated after layout; image loading invalidates and rebuilds layouts.
+    virtual bool hasAnimatedContent() const
+    {
+        return false;
+    }
     virtual int getMouseOverIndex(QPointF abs) const = 0;
     virtual qreal getXFromIndex(size_t index) = 0;
 
@@ -104,6 +109,7 @@ class ImageLayoutElement : public MessageLayoutElement
 {
 public:
     ImageLayoutElement(MessageElement &creator, ImagePtr image, QSizeF size);
+    bool hasAnimatedContent() const override;
 
 protected:
     void addCopyTextToString(QString &str, uint32_t from = 0,
@@ -123,6 +129,7 @@ public:
     LayeredImageLayoutElement(MessageElement &creator,
                               std::vector<ImagePtr> images,
                               std::vector<QSizeF> sizes, QSizeF largestSize);
+    bool hasAnimatedContent() const override;
 
 protected:
     void addCopyTextToString(QString &str, uint32_t from = 0,

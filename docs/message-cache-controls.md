@@ -26,10 +26,31 @@ Choose **Channel history > Cache diagnostics...** for a selectable report of:
   lookups on histories of at least 10,000 messages.
 
 Enable **Log cache performance every 30 seconds** in that menu, or the matching
-General setting, to emit the report through Qt logging category
-`chatterino.cache`. Logging is off by default. Counters are cumulative for the
+General setting, to save timestamped reports to
+`Misc/message-cache-performance.log` in Chatterino's data folder. The full path
+is shown at the bottom of Cache diagnostics. The file appends across restarts
+and rotates at 16 MiB, retaining one previous file with a `.1` suffix. Reports
+also go to Qt logging category `chatterino.cache`. Logging is off by default.
+Earlier builds emitted only the console report and did not save it to a file.
+
+Paint and layout call counts, total wall time, mean and maximum are collected
+only while logging is enabled. Paint can include a layout, so their totals
+overlap and should not be added together. Timings do not measure total CPU usage,
+message parsing or operating-system composition. Counters are cumulative for the
 view's lifetime; retained-message counts describe the current live cache. The
 report does not include chat text or usernames of message authors.
+
+Each report includes a session and view ID so multiple splits for the same
+channel remain distinguishable. Unchanged views log a heartbeat every five
+minutes; changed views still log at the normal 30-second interval. The report
+also counts message rows actually painted. These IDs and counters were added
+after the initial October logging build, so older files lack them.
+
+Animation redraws keep separate dirty regions for animated rows rather than
+repainting the rows between them. Static text and images are excluded from the
+animation element pass. Loaded animations read a shared 64-bit clock on demand;
+offscreen images no longer receive a separate callback on every animation tick.
+Frame timing, focus-based animation pausing and layered emotes stay supported.
 
 ## General performance changes
 

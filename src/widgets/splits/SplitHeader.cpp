@@ -46,6 +46,7 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPainter>
+#include <QSpinBox>
 
 #include <cmath>
 
@@ -498,16 +499,18 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
 
     auto *twitchChannel =
         dynamic_cast<TwitchChannel *>(this->split_->getChannel().get());
+    QMenu *history = nullptr;
 
     if (twitchChannel)
     {
-        auto *history = menu->addMenu("Channel history");
+        history = new QMenu("Channel history", menu.get());
         const auto channelName = twitchChannel->getName();
         const auto override =
             getSettings()->channelScrollbackOverride(channelName);
         auto *useDefault = history->addAction(
             QString("Use default (%1 messages)")
-                .arg(getSettings()->scrollbackSplitLimit.getValue()),
+                .arg(localizeNumbers(
+                    getSettings()->scrollbackSplitLimit.getValue())),
             this, [channelName] {
                 getSettings()->setChannelScrollbackOverride(channelName, 0);
             });
@@ -516,7 +519,8 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
         for (const auto limit : {1000, 10000, 100000, 250000, 500000, 1000000})
         {
             auto *action = history->addAction(
-                QString("%1 messages").arg(limit), this, [channelName, limit] {
+                QString("%1 messages").arg(localizeNumbers(limit)), this,
+                [channelName, limit] {
                     getSettings()->setChannelScrollbackOverride(channelName,
                                                                 limit);
                 });
@@ -524,22 +528,28 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
             action->setChecked(override == limit);
         }
         history->addAction("Custom length...", this, [this, channelName] {
-            bool accepted = false;
-            const auto limit = QInputDialog::getInt(
-                this, "Channel history length",
+            QInputDialog dialog(this);
+            dialog.setWindowTitle("Channel history length");
+            dialog.setInputMode(QInputDialog::IntInput);
+            dialog.setLabelText(
                 QString("Messages retained for %1 in all splits.\n"
                         "0 uses the default. Changes apply immediately.\n"
                         "Shrinking discards old history. Growing collects more "
                         "future messages.\n"
                         "Large histories use more memory.")
-                    .arg(channelName),
-                getSettings()
-                    ->channelScrollbackOverride(channelName)
-                    .value_or(0),
-                0, 1000000, 100, &accepted);
-            if (accepted)
+                    .arg(channelName));
+            dialog.setIntRange(0, 1000000);
+            dialog.setIntStep(100);
+            dialog.setIntValue(getSettings()
+                                   ->channelScrollbackOverride(channelName)
+                                   .value_or(0));
+            auto *input = dialog.findChild<QSpinBox *>();
+            input->setLocale(QLocale(QLocale::English, QLocale::UnitedStates));
+            input->setGroupSeparatorShown(true);
+            if (dialog.exec() == QDialog::Accepted)
             {
-                getSettings()->setChannelScrollbackOverride(channelName, limit);
+                getSettings()->setChannelScrollbackOverride(channelName,
+                                                            dialog.intValue());
             }
         });
         history->addSeparator();
@@ -733,6 +743,14 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
     hideInputAction->setCheckable(true);
     hideInputAction->setChecked(this->split_->getInputHidden());
 
+    // Pinned message, raid, hype train, poll and prediction bars.
+    auto *bannersAction = moreMenu->addAction(
+        "Show top banners", this->split_, [this](bool checked) {
+            this->split_->setBannersHidden(!checked);
+        });
+    bannersAction->setCheckable(true);
+    bannersAction->setChecked(!this->split_->getBannersHidden());
+
     if (this->split_->getChannel()->getType() == Channel::Type::TwitchMentions)
     {
         auto *action = new QAction(this);
@@ -834,6 +852,10 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
     //    moreMenu->addAction("Show changelog", this,
     //    SLOT(moreMenuShowChangelog()));
     menu->addMenu(moreMenu);
+    if (history)
+    {
+        menu->addMenu(history);
+    }
 
     return menu;
 }

@@ -16,6 +16,8 @@
 #include <QPainter>
 #include <QPainterPath>
 
+#include <algorithm>
+
 namespace {
 
 const QChar RTL_EMBED(0x202B);
@@ -211,6 +213,11 @@ bool ImageLayoutElement::paintAnimated(QPainter &painter, qreal yOffset)
     return false;
 }
 
+bool ImageLayoutElement::hasAnimatedContent() const
+{
+    return this->image_ && this->image_->animated();
+}
+
 int ImageLayoutElement::getMouseOverIndex(QPointF abs) const
 {
     if (abs.x() >= this->getRect().center().x())
@@ -343,6 +350,13 @@ bool LayeredImageLayoutElement::paintAnimated(QPainter &painter, qreal yOffset)
         }
     }
     return animatedFlag;
+}
+
+bool LayeredImageLayoutElement::hasAnimatedContent() const
+{
+    return std::ranges::any_of(this->images_, [](const auto &image) {
+        return image && image->animated();
+    });
 }
 
 int LayeredImageLayoutElement::getMouseOverIndex(QPointF abs) const

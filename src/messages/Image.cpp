@@ -18,7 +18,6 @@
 #include "util/PostToThread.hpp"
 
 #include <boost/functional/hash.hpp>
-#include <pajlada/signals/scoped-connection.hpp>
 #include <QBuffer>
 #include <QImageReader>
 #include <QNetworkAccessManager>
@@ -26,9 +25,11 @@
 #include <QNetworkRequest>
 #include <QTimer>
 
+#include <algorithm>
 #include <atomic>
-#include <numeric>
+#include <limits>
 #include <utility>
+#include <vector>
 
 // Duration between each check of every Image instance
 const auto IMAGE_POOL_CLEANUP_INTERVAL = std::chrono::minutes(1);
@@ -51,8 +52,6 @@ struct Frames::Storage {
     virtual void start(GIFTimer *timer) = 0;
     virtual std::optional<QPixmap> current() const = 0;
     virtual std::optional<QSize> frameSize() const = 0;
-
-    pajlada::Signals::ScopedConnection gifTimerConnection;
 };
 
 /// Stores all decoded frames in memory.
@@ -61,6 +60,13 @@ struct Frames::CachedFrames : Storage {
     explicit CachedFrames(QList<Frame> frames)
         : items(std::move(frames))
     {
+        this->frameEnds.reserve(this->items.size());
+        for (const auto &frame : this->items)
+        {
+            this->totalDuration +=
+                static_cast<std::uint64_t>(std::max(frame.duration, 1));
+            this->frameEnds.push_back(this->totalDuration);
+        }
     }
     ~CachedFrames() override = default;
     CachedFrames(const CachedFrames &) = delete;
@@ -98,53 +104,7 @@ struct Frames::CachedFrames : Storage {
             return;
         }
 
-        this->gifTimerConnection = timer->signal.connect([this] {
-            this->advance();
-        });
-
-        const auto totalLength =
-            std::accumulate(this->items.begin(), this->items.end(), 0UL,
-                            [](auto init, auto &&frame) {
-                                return init + frame.duration;
-                            });
-        if (totalLength == 0)
-        {
-            this->durationOffset = 0;
-        }
-        else
-        {
-            this->durationOffset =
-                std::min<int>(int(timer->position() % totalLength), 60000);
-        }
-        this->processOffset();
-    }
-
-    void advance()
-    {
-        this->durationOffset += GIF_FRAME_LENGTH;
-        this->processOffset();
-    }
-
-    void processOffset()
-    {
-        if (this->items.isEmpty())
-        {
-            return;
-        }
-
-        while (true)
-        {
-            this->index %= this->items.size();
-            if (this->durationOffset > this->items.at(this->index).duration)
-            {
-                this->durationOffset -= this->items.at(this->index).duration;
-                this->index = (this->index + 1) % this->items.size();
-            }
-            else
-            {
-                break;
-            }
-        }
+        this->clock = timer->clock();
     }
 
     std::optional<QPixmap> current() const override
@@ -152,6 +112,19 @@ struct Frames::CachedFrames : Storage {
         if (this->empty())
         {
             return std::nullopt;
+        }
+        if (this->clock && *this->clock != this->lastPosition)
+        {
+            this->lastPosition = *this->clock;
+            // Preserve the inclusive frame-end boundary of the previous timer
+            // implementation, without advancing every offscreen image each tick.
+            const auto phase =
+                this->lastPosition == 0
+                    ? 0
+                    : (this->lastPosition - 1) % this->totalDuration + 1;
+            this->index = std::lower_bound(this->frameEnds.begin(),
+                                           this->frameEnds.end(), phase) -
+                          this->frameEnds.begin();
         }
         return this->items[this->index].image;
     }
@@ -166,8 +139,12 @@ struct Frames::CachedFrames : Storage {
     }
 
     QList<Frame> items;
-    QList<Frame>::size_type index{0};
-    int durationOffset{0};
+    std::vector<std::uint64_t> frameEnds;
+    std::uint64_t totalDuration = 0;
+    std::shared_ptr<const std::uint64_t> clock;
+    mutable QList<Frame>::size_type index{0};
+    mutable std::uint64_t lastPosition =
+        std::numeric_limits<std::uint64_t>::max();
 };
 
 Frames::Frames()

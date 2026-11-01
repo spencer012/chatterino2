@@ -1738,11 +1738,17 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                                 .min = 100,
                                 .max = 1000000,
                                 .singleStep = 100,
+                                .showGroupSeparator = true,
                             })
         ->addTo(layout);
 
     SettingWidget::checkbox("Log message cache performance every 30 seconds",
                             s.cachePerformanceLogging)
+        ->setTooltip(
+            "Saves timestamped reports to Misc/message-cache-performance.log "
+            "in Chatterino's data folder, keeping one rotated file. "
+            "Includes paint and layout timings. The full path is shown "
+            "in Channel history > Cache diagnostics.")
         ->addTo(layout);
     SettingWidget::checkbox("Deduplicate repeated message content",
                             s.deduplicateMessageContent)
@@ -1760,6 +1766,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                                 .min = 100,
                                 .max = 100000,
                                 .singleStep = 100,
+                                .showGroupSeparator = true,
                             })
         ->addTo(layout);
 

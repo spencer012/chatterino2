@@ -5,6 +5,7 @@
 #pragma once
 
 #include "messages/MessageContentPool.hpp"
+#include "util/Helpers.hpp"
 
 #include <QString>
 
@@ -14,8 +15,8 @@ inline QString describeMessageContentPool()
 {
     const auto stats = MessageContentPool::global().stats();
     auto mib = [](auto bytes) {
-        return QString::number(static_cast<double>(bytes) / (1024.0 * 1024.0),
-                               'f', 2);
+        return QLocale().toString(
+            static_cast<double>(bytes) / (1024.0 * 1024.0), 'f', 2);
     };
     auto description =
         QString("Content deduplication (all channels): %1\n"
@@ -30,11 +31,11 @@ inline QString describeMessageContentPool()
             .arg(mib(stats.retainedGrossSavedBytes))
             .arg(mib(stats.estimatedOverheadBytes))
             .arg(mib(stats.trackingSlotBytes))
-            .arg(stats.indexedEntries)
-            .arg(stats.maxIndexedEntries)
-            .arg(stats.liveEntries)
-            .arg(stats.liveParticipants)
-            .arg(stats.passiveParticipants);
+            .arg(localizeNumbers(stats.indexedEntries))
+            .arg(localizeNumbers(stats.maxIndexedEntries))
+            .arg(localizeNumbers(stats.liveEntries))
+            .arg(localizeNumbers(stats.liveParticipants))
+            .arg(localizeNumbers(stats.passiveParticipants));
     description +=
         QString(
             "\nCumulative hits: %1; hits without releasing storage: %2\n"
@@ -44,14 +45,15 @@ inline QString describeMessageContentPool()
             "Cumulative pool lookup wall time: %7 ms\n"
             "Byte figures are allocation estimates, not measured process RAM.\n"
             "Each occurrence and emote element remains independent.")
-            .arg(stats.hits)
-            .arg(stats.hitsWithoutSaving)
-            .arg(stats.misses)
-            .arg(stats.deferred)
-            .arg(stats.evictions)
+            .arg(localizeNumbers(stats.hits))
+            .arg(localizeNumbers(stats.hitsWithoutSaving))
+            .arg(localizeNumbers(stats.misses))
+            .arg(localizeNumbers(stats.deferred))
+            .arg(localizeNumbers(stats.evictions))
             .arg(mib(stats.cumulativeDeduplicatedBytes))
-            .arg(static_cast<double>(stats.processingTimeNs) / 1000000.0, 0,
-                 'f', 2);
+            .arg(QLocale().toString(
+                static_cast<double>(stats.processingTimeNs) / 1000000.0, 'f',
+                2));
     return description;
 }
 

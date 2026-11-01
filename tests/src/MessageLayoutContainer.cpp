@@ -16,6 +16,8 @@
 #include "singletons/Theme.hpp"
 #include "Test.hpp"
 
+#include <QPainter>
+
 #include <memory>
 #include <vector>
 
@@ -44,6 +46,31 @@ public:
 
     Theme theme;
     Fonts fonts;
+};
+
+class AnimationProbe : public ImageLayoutElement
+{
+public:
+    AnimationProbe(MessageElement &creator, bool animated, int &paints)
+        : ImageLayoutElement(creator, nullptr, QSizeF(1, 20))
+        , animated_(animated)
+        , paints_(paints)
+    {
+    }
+
+    bool hasAnimatedContent() const override
+    {
+        return this->animated_;
+    }
+    bool paintAnimated(QPainter &, qreal) override
+    {
+        ++this->paints_;
+        return this->animated_;
+    }
+
+private:
+    bool animated_;
+    int &paints_;
 };
 
 std::vector<std::shared_ptr<MessageElement>> makeElements(const QString &text)
@@ -339,6 +366,35 @@ TEST(MessageLayoutContainer, ExhaustiveFlags)
     // This was not added, because ctx.flags only contains Text, not RepliedMessage
     imageHeaderElement.addToContainer(container, ctx);
     ASSERT_EQ(container.elements_.size(), 3);
+}
+
+TEST(MessageLayoutContainer, AnimationPassSkipsStaticElementsAndRebuildsIndex)
+{
+    MockApplication app;
+    TextElement creator("probe", MessageElementFlag::Text);
+    MessageLayoutContainer container;
+    int staticPaints = 0;
+    int animatedPaints = 0;
+    container.beginLayout(300, 1, 1, {});
+    for (int i = 0; i < 100; ++i)
+    {
+        container.addElement(new AnimationProbe(creator, false, staticPaints));
+    }
+    container.addElement(new AnimationProbe(creator, true, animatedPaints));
+    container.endLayout();
+    QPixmap canvas(300, 100);
+    QPainter painter(&canvas);
+    EXPECT_TRUE(container.paintAnimatedElements(painter, 0));
+    EXPECT_EQ(staticPaints, 0);
+    EXPECT_EQ(animatedPaints, 1);
+    container.clearLayout();
+    EXPECT_FALSE(container.paintAnimatedElements(painter, 0));
+    container.beginLayout(300, 1, 1, {});
+    container.addElement(new AnimationProbe(creator, false, staticPaints));
+    container.endLayout();
+    EXPECT_FALSE(container.paintAnimatedElements(painter, 0));
+    EXPECT_EQ(staticPaints, 0);
+    EXPECT_EQ(animatedPaints, 1);
 }
 
 }  // namespace chatterino
