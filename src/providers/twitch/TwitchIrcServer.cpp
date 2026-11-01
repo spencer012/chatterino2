@@ -338,6 +338,35 @@ void TwitchIrcServer::initialize()
                 }
             });
         });
+
+    using ChannelEventHandler = void (TwitchChannel::*)(const QString &,
+                                                        const QJsonObject &);
+    auto routeChannelEvent = [this](auto &signal, ChannelEventHandler handler) {
+        this->signalHolder.managedConnect(
+            signal, [this, handler](const QString &channelId,
+                                    const QString &type,
+                                    const QJsonObject &data) {
+                auto chan = this->getChannelOrEmptyByID(channelId);
+                postToThread([chan, handler, type, data] {
+                    if (isAppAboutToQuit())
+                    {
+                        return;
+                    }
+                    if (auto *channel =
+                            dynamic_cast<TwitchChannel *>(chan.get()))
+                    {
+                        (channel->*handler)(type, data);
+                    }
+                });
+            });
+    };
+    auto *pubSub = getApp()->getTwitchPubSub();
+    routeChannelEvent(pubSub->channelEvents.hypeTrain,
+                      &TwitchChannel::handleHypeTrainMessage);
+    routeChannelEvent(pubSub->channelEvents.poll,
+                      &TwitchChannel::handlePollMessage);
+    routeChannelEvent(pubSub->channelEvents.prediction,
+                      &TwitchChannel::handlePredictionMessage);
 }
 
 void TwitchIrcServer::aboutToQuit()

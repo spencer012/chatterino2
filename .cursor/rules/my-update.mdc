@@ -218,3 +218,31 @@ This is a fork of an existing open source project with some custom functionality
    - The Twitch split header menu has "Open most recent VOD", below "Open in streamlink". It runs `mpv <vod url>` detached, using `mpv` from PATH with no other arguments.
    - `Helix::getLatestArchiveVideo` (`src/providers/twitch/api/Helix.hpp/.cpp`, mock in `mocks/include/mocks/Helix.hpp`) fetches `videos?type=archive&first=1` for the channel's room ID. `Split::openLatestVodInMpv` reports missing VODs, Helix errors, and mpv launch failures as system messages.
 
+
+11. **Hype trains, polls and predictions**
+   - **Feature**: Stacked bars under the raid banner for the channel's hype train (any kind: normal, Treasure, Golden Kappa, shared), poll and prediction. Each one shows and hides on its own, so several can run at once. Polls can be voted on (free vote only) and predictions made from the bars. Chat gets a system message with the final numbers when a hype train, poll or prediction ends.
+   - **Files Added**:
+     - `src/providers/twitch/ChannelEvents.hpp/.cpp` - Side-effect-free state structs, PubSub/GQL parsers, GQL request builders, end-of-event chat text, and `ChannelEventsTracker`, which turns messages into current state plus once-only "ended" results.
+     - `src/widgets/splits/ChannelEventsBanner.hpp/.cpp` - The stacked bars (`channeleventsbanner::EventBar`, `ShareRow`, `ProgressStrip`, `ElidedLabel`), vote confirmation, and the sign-in prompt.
+     - `src/widgets/splits/PredictionDialog.hpp/.cpp` - Amount entry with quick amounts, payout estimate, balance before/after, and a lock countdown. The dialog is the confirmation.
+     - `tests/src/ChannelEvents.cpp` - Fixtures trimmed from real `hype-train-events-v2` / `predictions-channel-v1` / `polls` messages and real vote/prediction responses.
+     - `scripts/twitch-events-capture.user.js` - Tampermonkey script that records twitch.tv GQL and Hermes/PubSub traffic for polls, predictions and hype trains (tokens redacted) to check shapes against.
+   - **Files Modified**:
+     - `src/providers/twitch/PubSubManager.hpp/.cpp` - `listenToChannelEvents()` (topics `hype-train-events-v2`, `polls`, `predictions-channel-v1`; no auth needed) and `channelEvents.{hypeTrain,poll,prediction}` signals.
+     - `src/providers/twitch/PubSubClient.cpp` - Dispatches those topics as (channelId, type, data).
+     - `src/providers/twitch/TwitchIrcServer.cpp` - Routes the signals onto `TwitchChannel::handle*Message` on the GUI thread.
+     - `src/providers/twitch/TwitchChannel.hpp/.cpp` - Owns the tracker, fetches an unauthenticated GQL snapshot on join and when PubSub shows we're out of date (5s minimum gap), posts the end messages, and has a `channelEventsChanged` signal.
+     - `src/controllers/channelpoints/ChannelPointsController.hpp/.cpp` - `isSignedIn()`, `voteInPoll()` (`ChannelPollContext_VoteInPoll`) and `makePrediction()`, both persisted hashes with inline fallback, using the channel points sign-in.
+     - `src/widgets/splits/Split.hpp/.cpp` - Inserts `eventsBanner_` after `raidBanner_`. The pinned, raid and events banners sit in one `banners_` container so `setBannersHidden()` can hide them all.
+     - `src/widgets/splits/SplitHeader.cpp` - "More > Show top banners" (checkable, per split).
+     - Pinned messages for non-mods: `TwitchChannel::refreshPinnedMessage()` uses Helix `chat/pins` only when the user has mod rights (it returns 403 "does not have the required permission" otherwise) and falls back to the website's unauthenticated GQL `pinnedChatMessages` via `fetchPinnedMessageFromGql()` (also when Helix fails or the user is anonymous). `channelevents::buildPinnedMessageRequest/parsePinnedMessage` turn the GQL node into a `HelixPinnedChatMessage`; paid (non-`MOD`) and expired pins are skipped.
+     - `src/common/WindowDescriptors.hpp/.cpp`, `src/widgets/splits/SplitContainer.cpp` - Saves/loads the per-split `bannersHidden` flag in the window layout (missing = shown).
+     - `tests/src/SplitDescriptor.cpp` - Round-trip of `bannersHidden`.
+     - `src/CMakeLists.txt`, `tests/CMakeLists.txt` - New sources.
+   - **Behavior Notes**:
+     - Seeing events needs no login. Voting and predicting need the channel points sign-in; without it the bar offers to open the channel points popup.
+     - Every vote asks first. A prediction only happens from the dialog's "Predict N points" button. Paid extra poll votes (`tokens.channelPoints`) are intentionally not implemented.
+     - `hype-train-end` carries only `{id, ended_at, ending_reason}`, so the end message uses the last progress seen. `ending_reason: EXPIRED` means level 1 was never completed. A `hype-train-progression` for an unknown train triggers a snapshot.
+     - Ended polls and predictions keep their results on the bar for 30s (`RESULT_DISPLAY_SECONDS`). Prediction status only moves forward (active → locked → pending → ended), so out-of-order updates (an `ACTIVE` one for a last-second prediction after `LOCKED`, `CANCEL_PENDING` after `CANCELED`) are ignored, and repeats are never announced twice. If `LOCKED` hasn't arrived 2s after the window ends, `expire()` locks it locally; the dialog stops accepting predictions as soon as the timer hits 0.
+     - The client remembers its own votes and predictions for the session only (`recordPollVote` / `recordPrediction`); votes made elsewhere aren't shown (deliberately; `predictions-user-v1` isn't used). The prediction bar header shows your stake and the outcome you picked, in its color.
+     - Bars can be collapsed (click the header) or hidden per event (×). Polls and predictions start expanded until you take part, then collapse to a one-line summary.

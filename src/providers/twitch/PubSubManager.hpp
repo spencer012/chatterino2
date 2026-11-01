@@ -69,6 +69,21 @@ public:
         pajlada::Signals::Signal<const QString &, const RaidInfo &> cancelled;
     } raid;
 
+    /// Hype trains, polls and predictions.
+    /// Arguments: channel ID, message type (e.g. `hype-train-progression`,
+    /// `POLL_UPDATE`, `event-updated`), message data.
+    struct {
+        pajlada::Signals::Signal<const QString &, const QString &,
+                                 const QJsonObject &>
+            hypeTrain;
+        pajlada::Signals::Signal<const QString &, const QString &,
+                                 const QJsonObject &>
+            poll;
+        pajlada::Signals::Signal<const QString &, const QString &,
+                                 const QJsonObject &>
+            prediction;
+    } channelEvents;
+
     /**
      * Listen to incoming channel point redemptions in the given channel.
      * This topic is relevant for everyone.
@@ -92,6 +107,15 @@ public:
      * PubSub topic: raid.{channelID}
      */
     void listenToRaid(const QString &channelID);
+
+    /**
+     * Listen to hype trains, polls and predictions in the given channel.
+     * These topics are relevant for everyone.
+     *
+     * PubSub topics: hype-train-events-v2.{channelID}, polls.{channelID},
+     * predictions-channel-v1.{channelID}
+     */
+    void listenToChannelEvents(const QString &channelID);
 
     struct {
         std::atomic<uint32_t> messagesReceived{0};

@@ -26,6 +26,7 @@ class SplitContainer;
 class SplitOverlay;
 class PinnedMessageWidget;
 class RaidBannerWidget;
+class ChannelEventsBanner;
 class SelectChannelDialog;
 class OverlayWindow;
 class ChannelPointsPopup;
@@ -75,6 +76,9 @@ public:
     bool getCrowdCopyMode() const;
     void setInputHidden(bool value);
     bool getInputHidden() const;
+    /// Hides the pinned message, raid, hype train, poll and prediction bars.
+    void setBannersHidden(bool value);
+    bool getBannersHidden() const;
     bool replayChatEnabled() const;
     void toggleReplayChat();
 
@@ -177,6 +181,7 @@ private:
 
     bool moderationMode_{};
     bool inputHidden_{};
+    bool bannersHidden_{};
     bool isTopRightSplit_{};
 
     bool isMouseOver_{};
@@ -193,8 +198,11 @@ private:
 
     QVBoxLayout *const vbox_;
     SplitHeader *const header_;
+    /// Holds the banners below, so they can be hidden together.
+    QWidget *const banners_;
     PinnedMessageWidget *const pinnedBanner_;
     RaidBannerWidget *const raidBanner_;
+    ChannelEventsBanner *const eventsBanner_;
     ChannelView *const view_;
     SplitInput *const input_;
     SplitOverlay *const overlay_;

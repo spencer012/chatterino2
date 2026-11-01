@@ -52,6 +52,8 @@ struct SplitDescriptor {
     bool moderationMode_{false};
     bool crowdCopyMode_{false};
     bool inputHidden_{false};
+    // Hides the pinned message, raid, hype train, poll and prediction bars
+    bool bannersHidden_{false};
 
     std::optional<bool> spellCheckOverride;
 

@@ -202,6 +202,26 @@ void PubSubClient::handleMessageResponse(const PubSubMessageMessage &message)
         return;
     }
 
+    for (const auto &[prefix, signal] : {
+             std::pair{u"hype-train-events-v2."_s,
+                       &this->manager_.channelEvents.hypeTrain},
+             std::pair{u"polls."_s, &this->manager_.channelEvents.poll},
+             std::pair{u"predictions-channel-v1."_s,
+                       &this->manager_.channelEvents.prediction},
+         })
+    {
+        if (!message.topic.startsWith(prefix))
+        {
+            continue;
+        }
+
+        const auto channelId = message.topic.sliced(prefix.size());
+        const auto &inner = message.messageObject;
+        signal->invoke(channelId, inner.value("type").toString(),
+                       inner.value("data").toObject());
+        return;
+    }
+
     if (message.topic.startsWith("raid."))
     {
         auto oInnerMessage = message.toInner<PubSubRaidMessage>();

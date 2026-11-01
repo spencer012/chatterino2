@@ -13,6 +13,7 @@
 #include <QSet>
 #include <QTimer>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -66,6 +67,19 @@ public:
 
     /// Number of queued redeems for the channel.
     [[nodiscard]] int queuedCount(const QString &channelLogin) const;
+
+    /// Called once a vote or prediction is done. `message` explains a
+    /// failure.
+    using ActionCallback = std::function<void(bool ok, const QString &message)>;
+
+    [[nodiscard]] bool isSignedIn();
+    /// Votes for a poll choice (the free vote).
+    void voteInPoll(const QString &channelLogin, const QString &pollId,
+                    const QString &choiceId, ActionCallback callback);
+    /// Predicts `points` channel points on an outcome.
+    void makePrediction(const QString &channelLogin, const QString &eventId,
+                        const QString &outcomeId, std::int64_t points,
+                        ActionCallback callback);
 
 Q_SIGNALS:
     /// Something about the channel changed. Empty login = all channels.

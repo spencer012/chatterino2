@@ -13,6 +13,7 @@
 #include "providers/ffz/FfzBadges.hpp"
 #include "providers/ffz/FfzEmotes.hpp"
 #include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/ChannelEvents.hpp"
 #include "providers/twitch/eventsub/SubscriptionHandle.hpp"
 #include "providers/twitch/RaidInfo.hpp"
 #include "providers/twitch/TwitchEmotes.hpp"
@@ -410,8 +411,8 @@ public:
         const;
     // Pinned message
     /**
-     * Fetches the currently pinned message for this channel via the Helix API.
-     * Only has effect when the local user has moderator privileges.
+     * Fetches the currently pinned message for this channel. Mods use the
+     * Helix API, everyone else (and mods if Helix fails) the website's GQL.
      */
     void refreshPinnedMessage();
 
@@ -446,6 +447,27 @@ public:
 
     /// Fires when raid state changes (started, updated, gone, cancelled).
     pajlada::Signals::NoArgSignal raidChanged;
+
+    /// Applies a `hype-train-events-v2` PubSub message.
+    void handleHypeTrainMessage(const QString &type, const QJsonObject &data);
+    /// Applies a `polls` PubSub message.
+    void handlePollMessage(const QString &type, const QJsonObject &data);
+    /// Applies a `predictions-channel-v1` PubSub message.
+    void handlePredictionMessage(const QString &type, const QJsonObject &data);
+    /// Fetches the current hype train, poll and prediction.
+    void refreshChannelEvents();
+    /// Drops finished events. Called periodically while they're shown.
+    void expireChannelEvents();
+
+    [[nodiscard]] const ChannelEventsTracker &channelEvents() const;
+    /// Remembers a vote made from Chatterino, for the end-of-poll message.
+    void recordPollVote(const QString &pollId, const QString &choiceId);
+    /// Remembers a prediction made from Chatterino.
+    void recordPrediction(const QString &eventId, const QString &outcomeId,
+                          std::int64_t points);
+
+    /// Fires when the hype train, poll or prediction changes.
+    pajlada::Signals::NoArgSignal channelEventsChanged;
 
 private:
     struct NameOptions {
@@ -562,6 +584,7 @@ private:
                             const TwitchAccount &moderator, QString textHint);
 
     void refreshRaidTargetStream();
+    void applyChannelEventsResult(const ChannelEventsTracker::Result &result);
 
     // Data
     const QString subscriptionUrl_;
@@ -690,11 +713,17 @@ private:
     /// Incremented before each getPinnedChatMessage request so that stale
     /// responses from earlier requests are discarded.
     uint64_t pinnedMessageRequestId_ = 0;
+    void fetchPinnedMessageFromGql(uint64_t requestId);
 
     std::unique_ptr<RaidState> raidState_;
     QString lastTerminalRaidId_;
     bool announcedRaidGo_ = false;
     bool announcedRaidCancel_ = false;
+
+    ChannelEventsTracker channelEvents_;
+    bool channelEventsRequestPending_ = false;
+    bool channelEventsRefreshQueued_ = false;
+    QDateTime lastChannelEventsRequest_;
 
     friend class TwitchIrcServer;
     friend class MessageBuilder;

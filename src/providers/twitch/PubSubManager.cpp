@@ -124,4 +124,17 @@ void PubSub::listenToRaid(const QString &channelID)
     this->private_->subscribe(TopicData{.topic = std::move(topic)});
 }
 
+void PubSub::listenToChannelEvents(const QString &channelID)
+{
+    assert(!channelID.isEmpty());
+
+    for (const auto *prefix :
+         {"hype-train-events-v2.", "polls.", "predictions-channel-v1."})
+    {
+        auto topic = QString::fromLatin1(prefix) + channelID;
+        qCDebug(chatterinoPubSub) << "Listen to topic" << topic;
+        this->private_->subscribe(TopicData{.topic = std::move(topic)});
+    }
+}
+
 }  // namespace chatterino
