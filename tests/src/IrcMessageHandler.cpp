@@ -8,6 +8,7 @@
 #include "common/Literals.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/highlights/HighlightController.hpp"
+#include "controllers/highlights/types/MessageHighlight.hpp"
 #include "controllers/ignores/IgnorePhrase.hpp"
 #include "controllers/sound/NullBackend.hpp"
 #include "lib/Snapshot.hpp"
@@ -797,18 +798,22 @@ protected:
     std::unique_ptr<MockApplication> mockApplication;
 };
 
+namespace {
+
+/// Message highlight on "hello" that shows in mentions and plays no sound.
+void addHelloHighlight()
+{
+    highlights::MessageHighlight highlight{u"test-hello"};
+    highlight.setPattern("hello");
+    highlight.outcome.setSound("");
+    getSettings()->sharedHighlights.append(highlight);
+}
+
+}  // namespace
+
 TEST_F(TestIrcMessageHandlerFocused, HighlightedIgnoreSuppressesMentionsOnly)
 {
-    getSettings()->highlightedMessages.append(HighlightPhrase{
-        "hello",
-        true,
-        true,
-        false,
-        false,
-        false,
-        "",
-        HighlightPhrase::FALLBACK_HIGHLIGHT_COLOR,
-    });
+    addHelloHighlight();
     getSettings()->ignoredMessages.append(IgnorePhrase{
         "hello",
         false,
@@ -835,16 +840,7 @@ TEST_F(TestIrcMessageHandlerFocused, HighlightedIgnoreSuppressesMentionsOnly)
 
 TEST_F(TestIrcMessageHandlerFocused, HighlightedIgnoreSuppressesColorOnly)
 {
-    getSettings()->highlightedMessages.append(HighlightPhrase{
-        "hello",
-        true,
-        true,
-        false,
-        false,
-        false,
-        "",
-        HighlightPhrase::FALLBACK_HIGHLIGHT_COLOR,
-    });
+    addHelloHighlight();
     getSettings()->ignoredMessages.append(IgnorePhrase{
         "hello",
         false,

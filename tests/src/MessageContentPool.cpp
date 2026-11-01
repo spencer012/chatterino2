@@ -58,7 +58,7 @@ MessagePtrMut makeMessage(const QString &id, const QString &login,
     msg->id = id;
     msg->loginName = login;
     msg->displayName = login;
-    msg->serverReceivedTime =
+    msg->timestamp =
         QDateTime::fromMSecsSinceEpoch(id.toLongLong() * 1000);
     msg->messageText = body + (emote ? u' ' + emote->name.string : QString{}) +
                        (tail.isEmpty() ? QString{} : u' ' + tail);
@@ -186,7 +186,7 @@ TEST(MessageContentPool, EmoteBearingMessagesKeepOccurrenceState)
     EXPECT_EQ(first->id, u"1"_s);
     EXPECT_EQ(second->id, u"2"_s);
     EXPECT_EQ(second->loginName, u"bob"_s);
-    EXPECT_NE(first->serverReceivedTime, second->serverReceivedTime);
+    EXPECT_NE(first->timestamp, second->timestamp);
     EXPECT_TRUE(first->flags.has(MessageFlag::Highlighted));
     EXPECT_FALSE(second->flags.has(MessageFlag::Highlighted));
     EXPECT_EQ(second->replyParent, first);

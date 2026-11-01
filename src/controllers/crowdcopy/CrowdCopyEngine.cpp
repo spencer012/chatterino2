@@ -44,9 +44,9 @@ bool shouldIgnoreMessage(const MessagePtr &message)
 
 double messageAgeSeconds(const MessagePtr &message, const QDateTime &now)
 {
-    if (message->serverReceivedTime.isValid())
+    if (message->timestamp.isValid())
     {
-        return message->serverReceivedTime.msecsTo(now) / 1000.0;
+        return message->timestamp.msecsTo(now) / 1000.0;
     }
 
     return std::numeric_limits<double>::infinity();
