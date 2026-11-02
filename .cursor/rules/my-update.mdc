@@ -312,3 +312,18 @@ This is a fork of an existing open source project with some custom functionality
      - Highlights never hide messages. Replacing *blocking* ignores with highlights changes behavior; replacing *highlight-only* ignores with conditions inside filter highlights does not.
      - Changes go through the same `SignalVector`s as the settings dialog, so they show up live and save ~0.5s later. If the settings dialog is open and you press Cancel, its snapshot restore reverts the agent's changes made while it was open.
      - The token is only checked for equality (local-only server); "New token" invalidates configured clients.
+
+15. **Faster filter evaluation**
+   - **Feature**: Filters (filter highlights and split filters) are evaluated with short-circuiting, cheapest-operand-first ordering and merged regex/`contains` checks. Same syntax and identical results; 50 highlights shaped like `author.name == "x" && !(message.content match r"...")` went from 55-260 us to ~6 us per message.
+   - **Files Modified**:
+     - `src/controllers/filters/lang/Filter.hpp/.cpp` - `fromString()` takes `OptimizeOptions` (each optimization can be turned off) and builds an optimized evaluation tree next to the parse tree; `filterString()`/`debug()` still show the parse tree.
+     - `src/controllers/filters/lang/expressions/*` - Short-circuiting `&&`/`||`, static cost estimates, flattened and reordered chains, merged `match` alternations and folded multi-`contains`.
+     - `tests/src/lib/LegacyFilter.hpp/.cpp` - Verbatim copy of the previous parser/evaluator, used as the reference.
+     - `tests/src/Filters.cpp` - Differential test (10,000 random well- and ill-typed filters under all option combinations, value and type compared), short-circuit/reorder evaluation counts, exhaustive case-folding check.
+     - `tests/src/FilterPerformance.cpp` - Disabled benchmarks: `chatterino-test --gtest_also_run_disabled_tests --gtest_filter=FilterPerformance.*`.
+   - **Behavior Notes**:
+     - `||` only short-circuits or reorders when every operand always converts to a Bool, because the old `true || <list or color>` is false.
+     - Regexes are merged only when safe (same options, no backreferences, named groups, `\Q`, verbs or `x` flag; parts and result valid). Merging needs the PCRE2 JIT (on by default); with `QT_ENABLE_REGEXP_JIT=0` merged regexes are slower. Untested edge: a branch hitting PCRE2's match limit could hide a match another branch would find.
+     - Folded `contains` relies on Qt folding case per code point; an exhaustive test catches a Qt upgrade that changes this. A single `contains` is not folded (Qt's search stops at the first hit and is faster).
+     - Multi-threading was measured and rejected: a thread-pool round trip (~5.8 us) costs as much as all 50 optimized filters, and splitting one message's filters 4 ways made it slower (6.0 -> 27.7 us). Filters still run on the GUI thread.
+     - Division or modulo by zero in a filter still crashes, as before.
