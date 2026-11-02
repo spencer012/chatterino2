@@ -89,6 +89,8 @@ set(test_SOURCES
 
     ${CMAKE_CURRENT_LIST_DIR}/src/lib/Snapshot.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/lib/Snapshot.hpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/lib/LegacyFilter.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/lib/LegacyFilter.hpp
     )
 
 add_executable(${PROJECT_NAME} ${test_SOURCES})
