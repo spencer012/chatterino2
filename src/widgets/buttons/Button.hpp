@@ -197,6 +197,8 @@ protected:
     }
 
 private:
+    /// Starts the hover/click animation timer if it isn't already running
+    void startEffectTimer();
     void onMouseEffectTimeout();
     void showMenu();
 

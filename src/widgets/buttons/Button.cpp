@@ -21,8 +21,11 @@ Button::Button(BaseWidget *parent)
     connect(&this->effectTimer_, &QTimer::timeout, this,
             &Button::onMouseEffectTimeout);
 
+    // Only runs while a hover or click animation is in progress. Thousands of
+    // always-running 20ms timers (one per tab and split header button) keep
+    // the Windows message queue from ever draining, which starves Qt's
+    // posted events and freezes all repaints.
     this->effectTimer_.setInterval(20);
-    this->effectTimer_.start();
 
     this->setMouseTracking(true);
 }
@@ -174,6 +177,7 @@ void Button::enterEvent(QEnterEvent * /*event*/)
     if (!this->mouseOver_)
     {
         this->mouseOver_ = true;
+        this->startEffectTimer();
         this->update();
         this->mouseOverUpdated();
     }
@@ -184,6 +188,7 @@ void Button::leaveEvent(QEvent * /*event*/)
     if (this->mouseOver_)
     {
         this->mouseOver_ = false;
+        this->startEffectTimer();
         this->update();
         this->mouseOverUpdated();
     }
@@ -289,6 +294,15 @@ void Button::mouseMoveEvent(QMouseEvent *event)
 void Button::addClickEffect(QPoint position)
 {
     this->clickEffects_.emplace_back(position);
+    this->startEffectTimer();
+}
+
+void Button::startEffectTimer()
+{
+    if (!this->effectTimer_.isActive())
+    {
+        this->effectTimer_.start();
+    }
 }
 
 void Button::onMouseEffectTimeout()
@@ -337,6 +351,12 @@ void Button::onMouseEffectTimeout()
     if (performUpdate)
     {
         this->update();
+    }
+
+    double hoverTarget = this->mouseOver_ ? 1.0 : 0.0;
+    if (this->hoverMultiplier_ == hoverTarget && this->clickEffects_.empty())
+    {
+        this->effectTimer_.stop();
     }
 }
 
