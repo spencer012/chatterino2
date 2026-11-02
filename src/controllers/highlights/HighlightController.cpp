@@ -30,11 +30,20 @@ const auto &LOG = chatterinoHighlights;
 bool rebuildSharedHighlights(Settings &settings,
                              std::vector<HighlightCheck> &checks)
 {
-    bool isSubscribedThreadHighlightEnabled = false;
-
     auto highlights = settings.sharedHighlights.readOnly();
 
-    for (const auto &highlight : *highlights)
+    return HighlightController::buildChecks(*highlights, checks);
+}
+
+}  // namespace
+
+bool HighlightController::buildChecks(
+    const std::vector<highlights::AnyHighlight> &highlights,
+    std::vector<HighlightCheck> &checks)
+{
+    bool isSubscribedThreadHighlightEnabled = false;
+
+    for (const auto &highlight : highlights)
     {
         auto enabled = highlights::isEnabled(highlight);
 
@@ -61,8 +70,6 @@ bool rebuildSharedHighlights(Settings &settings,
 
     return isSubscribedThreadHighlightEnabled;
 }
-
-}  // namespace
 
 HighlightController::HighlightController(Settings &settings,
                                          AccountController *accounts)
@@ -103,13 +110,20 @@ void HighlightController::rebuildChecks(Settings &settings)
 std::pair<bool, HighlightResult> HighlightController::check(
     const HighlightCheckParams &params) const
 {
-    bool highlighted = false;
-    auto result = HighlightResult::emptyResult();
-
     // Access for checking
     const auto checks = this->checks_.accessConst();
 
-    for (const auto &check : *checks)
+    return HighlightController::runChecks(*checks, params);
+}
+
+std::pair<bool, HighlightResult> HighlightController::runChecks(
+    const std::vector<HighlightCheck> &checks,
+    const HighlightCheckParams &params)
+{
+    bool highlighted = false;
+    auto result = HighlightResult::emptyResult();
+
+    for (const auto &check : checks)
     {
         if (auto checkResult = check(params))
         {

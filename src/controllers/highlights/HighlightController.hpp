@@ -8,6 +8,7 @@
 #include "common/UniqueAccess.hpp"
 #include "controllers/highlights/HighlightCheck.hpp"
 #include "controllers/highlights/HighlightResult.hpp"
+#include "controllers/highlights/types/AnyHighlightForward.hpp"
 #include "singletons/Settings.hpp"
 
 #include <pajlada/settings.hpp>
@@ -45,6 +46,18 @@ public:
      **/
     [[nodiscard]] std::pair<bool, HighlightResult> check(
         const HighlightCheckParams &params) const;
+
+    /// Builds the checks of every enabled highlight in `highlights` into `checks`.
+    ///
+    /// Returns whether the Subscribed Thread highlight is enabled.
+    static bool buildChecks(
+        const std::vector<highlights::AnyHighlight> &highlights,
+        std::vector<HighlightCheck> &checks);
+
+    /// Runs the given checks against the message parameters and merges their results
+    [[nodiscard]] static std::pair<bool, HighlightResult> runChecks(
+        const std::vector<HighlightCheck> &checks,
+        const HighlightCheckParams &params);
 
     /// Returns a set of built-in highlight IDs (e.g. {"whispers", "yourusername"})
     static std::unordered_set<QStringView> billTinHighlights();
