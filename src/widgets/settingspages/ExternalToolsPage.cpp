@@ -4,6 +4,7 @@
 
 #include "widgets/settingspages/ExternalToolsPage.hpp"
 
+#include "controllers/mcp/McpServer.hpp"
 #include "controllers/spellcheck/SpellChecker.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
@@ -26,6 +27,8 @@
 #include <algorithm>
 
 namespace chatterino {
+
+using namespace Qt::StringLiterals;
 
 namespace {
 
@@ -363,6 +366,95 @@ void ExternalToolsPage::initLayout(GeneralPageView &layout)
             exportImageUploaderSettings(this);
         });
         buttonLayout->addWidget(exportButton);
+
+        buttonLayout->addStretch();
+        layout.addLayout(buttonLayout);
+    }
+
+    {
+        layout.addTitle("MCP server");
+
+        layout.addDescription(
+            "Lets an AI agent (Claude Code, T3 Code, Cursor...) read and "
+            "change your highlights, ignores, filters, commands and "
+            "nicknames, and read the chat loaded in your splits, through the "
+            "Model Context Protocol. It only accepts connections from this "
+            "computer that send the token below. Every change is backed up "
+            "first and can be restored by the agent.");
+
+        SettingWidget::checkbox("Enable MCP server", s.mcpServerEnabled)
+            ->addTo(layout);
+        SettingWidget::checkbox("Allow changes", s.mcpServerAllowChanges)
+            ->setTooltip("When off, the agent can only read settings and "
+                         "chat.")
+            ->addTo(layout);
+
+        auto *form = new QFormLayout;
+        layout.addLayout(form);
+        SettingWidget::intInput("Listen port", s.mcpServerPort,
+                                {.min = 1, .max = 65535})
+            ->addTo(layout, form);
+
+        auto *urlLabel = makeWrappedLabel({});
+        layout.addWidget(urlLabel);
+        s.mcpServerPort.connect(
+            [urlLabel](int port) {
+                urlLabel->setText(u"URL: "_s + mcp::McpServer::url(port));
+            },
+            this->managedConnections_);
+
+        auto ensureToken = [] {
+            auto &settings = *getSettings();
+            if (settings.mcpServerToken.getValue().isEmpty())
+            {
+                settings.mcpServerToken = mcp::McpServer::generateToken();
+            }
+            return settings.mcpServerToken.getValue();
+        };
+
+        auto *buttonLayout = new QHBoxLayout;
+
+        auto *copyConfig = new QPushButton("Copy client config");
+        copyConfig->setToolTip(
+            "Copy an \"mcpServers\" JSON entry with the URL and token, for "
+            "your MCP client's configuration");
+        QObject::connect(copyConfig, &QPushButton::clicked, [ensureToken] {
+            QJsonObject server{
+                {"type", "http"},
+                {"url",
+                 mcp::McpServer::url(getSettings()->mcpServerPort.getValue())},
+                {"headers",
+                 QJsonObject{{"Authorization", u"Bearer "_s + ensureToken()}}},
+            };
+            QJsonObject config{
+                {"mcpServers", QJsonObject{{"chatterino", server}}},
+            };
+            crossPlatformCopy(QJsonDocument(config).toJson());
+        });
+        buttonLayout->addWidget(copyConfig);
+
+        auto *copyToken = new QPushButton("Copy token");
+        QObject::connect(copyToken, &QPushButton::clicked, [ensureToken] {
+            crossPlatformCopy(ensureToken());
+        });
+        buttonLayout->addWidget(copyToken);
+
+        auto *newToken = new QPushButton("New token");
+        newToken->setToolTip("Replace the token. Clients using the old one "
+                             "stop working.");
+        QObject::connect(newToken, &QPushButton::clicked, [this] {
+            auto answer = QMessageBox::question(
+                this, "New MCP token",
+                "Replace the token? MCP clients using the current one have "
+                "to be updated.",
+                QMessageBox::Yes | QMessageBox::No);
+            if (answer == QMessageBox::Yes)
+            {
+                getSettings()->mcpServerToken =
+                    mcp::McpServer::generateToken();
+            }
+        });
+        buttonLayout->addWidget(newToken);
 
         buttonLayout->addStretch();
         layout.addLayout(buttonLayout);

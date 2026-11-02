@@ -11,6 +11,7 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/chathistory/ChatHistoryManager.hpp"
 #include "controllers/channelpoints/ChannelPointsController.hpp"
+#include "controllers/mcp/McpServer.hpp"
 #include "controllers/replay/ReplayController.hpp"
 #include "controllers/commands/Command.hpp"
 #include "controllers/commands/CommandController.hpp"
@@ -299,6 +300,11 @@ void Application::initialize(Settings &settings, const Paths &paths)
                                 this->seventvEventAPI.get());
 
     this->streamerMode->start();
+
+    if (!this->args_.isFramelessEmbed)
+    {
+        this->mcpServer = std::make_unique<mcp::McpServer>(settings);
+    }
 
     this->initialized = true;
 }
@@ -647,6 +653,7 @@ void Application::aboutToQuit()
 
 void Application::stop()
 {
+    this->mcpServer.reset();
 #ifdef CHATTERINO_HAVE_PLUGINS
     this->plugins.reset();
 #endif

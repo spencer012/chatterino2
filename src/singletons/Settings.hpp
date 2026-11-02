@@ -659,6 +659,11 @@ public:
     IntSetting replayServerPort = {"/external/replay/port", 38776};
     IntSetting replayLiveEnterMs = {"/external/replay/liveEnterMs", 15000};
     IntSetting replayLiveExitMs = {"/external/replay/liveExitMs", 20000};
+    BoolSetting mcpServerEnabled = {"/external/mcp/enabled", false};
+    IntSetting mcpServerPort = {"/external/mcp/port", 38777};
+    /// Bearer token MCP clients have to send. Generated when the server is first enabled.
+    QStringSetting mcpServerToken = {"/external/mcp/token", ""};
+    BoolSetting mcpServerAllowChanges = {"/external/mcp/allowChanges", true};
 
     // Custom URI Scheme
     QStringSetting customURIScheme = {"/external/urischeme"};

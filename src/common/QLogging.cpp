@@ -36,6 +36,7 @@ Q_LOGGING_CATEGORY(chatterinoLiveupdates, "chatterino.liveupdates",
                    logThreshold);
 Q_LOGGING_CATEGORY(chatterinoLua, "chatterino.lua", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoMain, "chatterino.main", logThreshold);
+Q_LOGGING_CATEGORY(chatterinoMcp, "chatterino.mcp", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoMessage, "chatterino.message", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoNativeMessage, "chatterino.nativemessage",
                    logThreshold);

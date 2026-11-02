@@ -79,6 +79,15 @@ set(SOURCE_FILES
 
         controllers/chathistory/ChatHistoryManager.cpp
         controllers/chathistory/ChatHistoryManager.hpp
+        controllers/mcp/McpChat.hpp
+        controllers/mcp/McpChatTools.cpp
+        controllers/mcp/McpConfig.hpp
+        controllers/mcp/McpConfigTools.cpp
+        controllers/mcp/McpJson.hpp
+        controllers/mcp/McpServer.cpp
+        controllers/mcp/McpServer.hpp
+        controllers/mcp/McpSimulationTools.cpp
+        controllers/mcp/McpTool.hpp
         controllers/channelpoints/ChannelPointsApi.cpp
         controllers/channelpoints/ChannelPointsApi.hpp
         controllers/channelpoints/ChannelPointsAuth.cpp
