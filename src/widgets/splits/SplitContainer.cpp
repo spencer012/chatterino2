@@ -9,6 +9,7 @@
 #include "common/QLogging.hpp"
 #include "common/WindowDescriptors.hpp"
 #include "debug/AssertInGuiThread.hpp"
+#include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
@@ -242,6 +243,11 @@ void SplitContainer::addSplit(Split *split)
     conns.managedConnect(split->getChannelView().liveStatusChanged, [this]() {
         this->refreshTabLiveStatus();
     });
+
+    conns.managedConnect(split->getChannelView().joinedStatusChanged,
+                         [this]() {
+                             this->refreshTabJoinedStatus();
+                         });
 
     conns.managedConnect(split->focused, [this, split] {
         this->setSelected(split);
@@ -787,6 +793,7 @@ void SplitContainer::refreshTab()
 {
     this->refreshTabTitle();
     this->refreshTabLiveStatus();
+    this->refreshTabJoinedStatus();
 }
 
 std::vector<Split *> SplitContainer::getSplits() const
@@ -1026,6 +1033,22 @@ void SplitContainer::refreshTabLiveStatus()
             notebook->refresh();
         }
     }
+}
+
+void SplitContainer::refreshTabJoinedStatus()
+{
+    if (this->tab_ == nullptr)
+    {
+        return;
+    }
+
+    bool allJoined = std::ranges::all_of(this->splits_, [](const auto *s) {
+        auto *twitchChannel =
+            dynamic_cast<TwitchChannel *>(s->getChannel().get());
+        return twitchChannel == nullptr || twitchChannel->isJoined();
+    });
+
+    this->tab_->setNotJoined(!allJoined);
 }
 
 //

@@ -115,6 +115,11 @@ NotebookTab::NotebookTab(Notebook *notebook)
             this->update();
         },
         this->managedConnections_);
+    getSettings()->showTabNotJoined.connect(
+        [this](auto, auto) {
+            this->update();
+        },
+        this->managedConnections_);
 
     this->setMouseTracking(true);
 
@@ -732,6 +737,15 @@ bool NotebookTab::isLive() const
     return this->isLive_;
 }
 
+void NotebookTab::setNotJoined(bool notJoined)
+{
+    if (this->isNotJoined_ != notJoined)
+    {
+        this->isNotJoined_ = notJoined;
+        this->update();
+    }
+}
+
 HighlightState NotebookTab::highlightState() const
 {
     return this->highlightState_;
@@ -974,6 +988,31 @@ void NotebookTab::paintEvent(QPaintEvent *)
             break;
     }
 
+    bool showNotJoined =
+        this->isNotJoined_ && getSettings()->showTabNotJoined;
+
+    if (showNotJoined)
+    {
+        // Always as thick as the selected tab's line so it's easy to spot
+        auto notJoinedThickness = int(ceil(2.f * scale));
+        switch (this->tabLocation_)
+        {
+            case NotebookTabLocation::Top:
+                lineRect.setHeight(notJoinedThickness);
+                break;
+            case NotebookTabLocation::Left:
+                lineRect.setWidth(notJoinedThickness);
+                break;
+            case NotebookTabLocation::Right:
+                lineRect.setLeft(lineRect.right() - notJoinedThickness + 1);
+                break;
+            case NotebookTabLocation::Bottom:
+                lineRect.setTop(lineRect.bottom() - notJoinedThickness + 1);
+                break;
+        }
+        lineColor = QColor(255, 140, 0);
+    }
+
     painter.fillRect(lineRect, lineColor);
 
     // draw live indicator
@@ -1006,7 +1045,16 @@ void NotebookTab::paintEvent(QPaintEvent *)
     }
 
     // set the pen color
-    painter.setPen(colors.text);
+    if (showNotJoined)
+    {
+        QColor dimmed = colors.text;
+        dimmed.setAlphaF(dimmed.alphaF() * 0.5);
+        painter.setPen(dimmed);
+    }
+    else
+    {
+        painter.setPen(colors.text);
+    }
 
     float compactDivider = getCompactDivider(getSettings()->tabStyle);
     // set area for text

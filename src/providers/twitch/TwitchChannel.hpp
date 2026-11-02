@@ -234,6 +234,14 @@ public:
      */
     void markConnected();
 
+    /**
+     * Returns true if the read connection has joined this channel.
+     *
+     * Channels that are never joined (plugin channels starting with "/")
+     * always count as joined.
+     */
+    bool isJoined() const;
+
     // Emotes
     std::optional<EmotePtr> twitchEmote(EmoteNameView name) const;
     std::optional<EmotePtr> bttvEmote(EmoteNameView name) const;
@@ -341,6 +349,9 @@ public:
      * This signal fires when the local user has joined the channel
      **/
     pajlada::Signals::NoArgSignal joined;
+
+    /// Fires when #isJoined changes
+    pajlada::Signals::NoArgSignal joinedStatusChanged;
 
     // Only TwitchChannel may invoke this signal
     pajlada::Signals::NoArgSignal userStateChanged;
@@ -594,6 +605,7 @@ private:
     UniqueAccess<StreamStatus> streamStatus_;
     UniqueAccess<RoomModes> roomModes;
     bool disconnected_{};
+    bool joined_{};
     std::optional<std::chrono::time_point<std::chrono::system_clock>>
         lastConnectedAt_{};
     std::atomic_flag loadingRecentMessages_ = ATOMIC_FLAG_INIT;

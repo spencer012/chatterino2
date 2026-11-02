@@ -311,6 +311,13 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                      "indicate one of the channels in the tab is live.")
         ->addTo(layout);
 
+    SettingWidget::checkbox("Mark tabs with channels that aren't connected",
+                            s.showTabNotJoined)
+        ->setTooltip("Shows an orange line and dims the title of a tab while "
+                     "one of its Twitch channels hasn't been joined yet, "
+                     "e.g. while starting up or after losing the connection.")
+        ->addTo(layout);
+
     layout.addTitle("Chat");
 
     layout.addDropdown<float>(
