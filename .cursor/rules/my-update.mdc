@@ -288,3 +288,27 @@ This is a fork of an existing open source project with some custom functionality
      - Non-Twitch splits (mentions, whispers, live, automod, empty) never mark the tab.
      - A channel Twitch refuses to join (suspended, nonexistent) stays marked, since no JOIN ever arrives.
      - A silently dead connection only shows once Communi notices (ping timeout) and emits `disconnected`.
+
+14. **MCP server (agent access to settings and chat)**
+   - **Feature**: An in-app [Model Context Protocol](https://modelcontextprotocol.io) server (Streamable HTTP transport) so an AI agent can read and change highlights, ignores, filters, commands, the highlight blacklist and nicknames, dry-run changes against loaded chat, and query loaded messages and users. Settings > External tools > "MCP server": enable (`/external/mcp/enabled`, default off), "Allow changes" (`/external/mcp/allowChanges`, default on), port (`/external/mcp/port`, default 38777), bearer token (`/external/mcp/token`, generated on first enable), "Copy client config" (an `mcpServers` JSON entry with URL and `Authorization` header).
+   - **Tools**:
+     - Settings: `list_config`, `add_config_items`, `update_config_items`, `remove_config_items`, `move_config_item` on sections `highlights`, `ignores`, `filters`, `commands`, `highlight_blacklist`, `nicknames`. Items use the exact JSON stored in settings.json (pajlada `Serialize`/`Deserialize`), so every highlight type works. Writes are all-or-nothing per call. Built-in highlights can be edited but not added or removed.
+     - Backups: every write first saves all six lists to `Settings/mcp-backups/<yyyyMMdd-HHmmss-zzz>.json` (newest 200 kept); `list_backups`, `create_backup`, `restore_backup` (which backs up the current state first). A failed write deletes its backup again.
+     - Filters: `validate_filter` (parse error, return type, parsed form), `filter_reference` (identifiers and operators).
+     - Chat: `list_channels`, `get_messages` (per channel or all open channels; user/contains/regex/highlighted filters; paging with `before_id`), `get_user` (loaded messages, badges, notes, custom color, nickname, blocked, blacklisted; with `remote` the same Helix/IVR lookups as the user card: account age, description, followers, live, follow age where you are mod, sub status).
+     - Dry run: `test_filter` (matches over loaded messages, top senders, matching or non-matching examples), `simulate_config` (current vs proposed highlights and ignores on loaded messages; counts and examples of changed outcomes), `check_message` (one made-up message, current and proposed).
+   - **Files Modified**:
+     - `src/controllers/mcp/McpServer.hpp/.cpp` - `QTcpServer` on 127.0.0.1, minimal HTTP/1.1 (keep-alive, Content-Length and chunked bodies, one request at a time per connection), bearer token check, Origin check (only localhost origins), JSON-RPC (`initialize`, `ping`, `tools/list`, `tools/call`; batches accepted for 2025-03-26 clients). Runs on the GUI thread; tools may answer asynchronously.
+     - `src/controllers/mcp/McpTool.hpp`, `McpJson.hpp`, `McpConfig.hpp`, `McpChat.hpp` - Tool type, schema/argument helpers, settings JSON conversion, shared helpers.
+     - `src/controllers/mcp/McpConfigTools.cpp`, `McpChatTools.cpp`, `McpSimulationTools.cpp` - The tools.
+     - `src/controllers/highlights/HighlightController.hpp/.cpp` - `buildChecks()` and `runChecks()` split out as static functions so the dry run can evaluate a proposed highlight list exactly like the live one.
+     - `src/Application.hpp/.cpp` - Owns the server (not created for frameless embeds), destroyed first in `stop()`.
+     - `src/singletons/Settings.hpp`, `src/widgets/settingspages/ExternalToolsPage.cpp` - The settings.
+     - `src/common/QLogging.hpp/.cpp` - `chatterino.mcp` category.
+     - `tests/src/McpServer.cpp`, `tests/CMakeLists.txt`, `src/CMakeLists.txt` - Protocol, tool list, filter validation, dry-run outcomes.
+   - **Behavior Notes**:
+     - The dry run mirrors `MessageBuilder::makeIrcMessage`: blocking ignore phrases, then highlight-only phrases, then the highlight blacklist, then highlights. Stored messages are copied with `Highlighted`/`ShowInMentions`/`DoNotShowInMentions`/`DisableHighlightColor` cleared so filters see them as they were before highlighting. `currentMismatch` counts messages whose simulated current outcome differs from what actually happened (settings changed since, or time-dependent identifiers like `channel.live`).
+     - Messages hidden by blocking ignores are never stored, so `simulate_config` can't show what unblocking them would do; `check_message` covers that.
+     - Highlights never hide messages. Replacing *blocking* ignores with highlights changes behavior; replacing *highlight-only* ignores with conditions inside filter highlights does not.
+     - Changes go through the same `SignalVector`s as the settings dialog, so they show up live and save ~0.5s later. If the settings dialog is open and you press Cancel, its snapshot restore reverts the agent's changes made while it was open.
+     - The token is only checked for equality (local-only server); "New token" invalidates configured clients.
