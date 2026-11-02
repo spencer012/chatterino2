@@ -68,32 +68,38 @@ function Update-RunExe {
     $dir = Split-Path $Destination
     $name = [System.IO.Path]::GetFileNameWithoutExtension($Destination)
     $staged = Join-Path $dir "$name.new.exe"
-    $old = Join-Path $dir "$name.old.exe"
 
     Copy-Item -Path $Source -Destination $staged -Force
 
-    # Left over from the last swap. Still locked if that build is running.
-    if ((Test-Path $old) -and -not (Test-FileLocked $old)) {
-        Remove-Item $old -Force
-    }
+    # Left over from earlier swaps. Still locked while that build is running.
+    Get-ChildItem -Path $dir -Filter "$name.old*.exe" |
+        Where-Object { -not (Test-FileLocked $_.FullName) } |
+        Remove-Item -Force
 
+    $movedAside = $null
     if (Test-Path $Destination) {
-        if (Test-Path $old) {
-            # Both the previous and the current build are running.
-            Remove-Item $staged -Force
-            Write-Warning "Two older builds are still running ($Destination and $old). Close one and build again."
-            return $false
+        if (Test-FileLocked $Destination) {
+            # Pick a name no other still-running build is using.
+            $movedAside = Join-Path $dir "$name.old.exe"
+            $i = 1
+            while (Test-Path $movedAside) {
+                $movedAside = Join-Path $dir "$name.old$i.exe"
+                $i++
+            }
+            Move-Item -Path $Destination -Destination $movedAside
+        } else {
+            # Not running (the running instance was already moved aside by
+            # an earlier build), so it can just be replaced.
+            Remove-Item $Destination -Force
         }
-        Move-Item -Path $Destination -Destination $old
     }
     Move-Item -Path $staged -Destination $Destination
 
-    if (Test-Path $old) {
+    if ($movedAside) {
         Write-Host "Updated $Destination (the running instance keeps the previous build until restarted)"
     } else {
         Write-Host "Updated $Destination"
     }
-    return $true
 }
 
 function Get-RunExeProcesses {
@@ -101,7 +107,7 @@ function Get-RunExeProcesses {
 
     $dir = Split-Path $Path
     $name = [System.IO.Path]::GetFileNameWithoutExtension($Path)
-    Get-Process -Name $name, "$name.old" -ErrorAction SilentlyContinue |
+    Get-Process -Name $name, "$name.old*" -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -and (Split-Path $_.Path) -eq $dir }
 }
 
@@ -172,14 +178,9 @@ if ($Tests) {
     exit 0
 }
 
-$updated = Update-RunExe -Source $exePath -Destination $runExePath
+Update-RunExe -Source $exePath -Destination $runExePath
 
 if ($Run) {
-    if (-not $updated) {
-        Write-Warning "Not launching because $runExePath was not updated."
-        exit 0
-    }
-
     $running = @(Get-RunExeProcesses $runExePath)
     if ($running.Count -gt 0) {
         Write-Host "Closing the running Chatterino..."
