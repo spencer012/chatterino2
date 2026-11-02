@@ -11,6 +11,8 @@ namespace chatterino::filters {
 ValueExpression::ValueExpression(QVariant value, TokenType type)
     : value_(std::move(value))
     , type_(type)
+    , convertsToBool_(
+          QVariant(this->value_).convert(QMetaType(QMetaType::Bool)))
 {
 }
 
@@ -30,6 +32,26 @@ PossibleType ValueExpression::synthesizeType() const
         default:
             return IllTyped{this, "Invalid value type"};
     }
+}
+
+int ValueExpression::cost() const
+{
+    return 2;
+}
+
+bool ValueExpression::alwaysConvertsToBool() const
+{
+    return this->convertsToBool_;
+}
+
+bool ValueExpression::alwaysReturnsString() const
+{
+    return variantIs(this->value_, QMetaType::QString);
+}
+
+const QVariant &ValueExpression::value() const
+{
+    return this->value_;
 }
 
 TokenType ValueExpression::type()

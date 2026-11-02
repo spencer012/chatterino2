@@ -19,6 +19,9 @@ public:
     QString debug() const override;
     QString filterString() const override;
 
+    void optimize(const OptimizeOptions &options) override;
+    int cost() const override;
+
 private:
     ExpressionList list_;
 };

@@ -32,7 +32,8 @@ using FilterResult = std::variant<Filter, FilterError>;
 class Filter
 {
 public:
-    static FilterResult fromString(const QString &str);
+    static FilterResult fromString(const QString &str,
+                                   const OptimizeOptions &options = {});
 
     Type returnType() const;
     QVariant execute(RunContext context) const;
@@ -41,7 +42,8 @@ public:
     QString debugString() const;
 
 private:
-    Filter(ExpressionPtr expression, Type returnType);
+    Filter(ExpressionPtr expression, Type returnType,
+           const OptimizeOptions &options);
 
     ExpressionPtr expression_;
     Type returnType_;

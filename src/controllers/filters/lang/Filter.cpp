@@ -8,7 +8,8 @@
 
 namespace chatterino::filters {
 
-FilterResult Filter::fromString(const QString &str)
+FilterResult Filter::fromString(const QString &str,
+                                const OptimizeOptions &options)
 {
     FilterParser parser(str);
 
@@ -16,16 +17,18 @@ FilterResult Filter::fromString(const QString &str)
     {
         auto exp = parser.release();
         auto typ = parser.returnType();
-        return Filter(std::move(exp), typ);
+        return Filter(std::move(exp), typ, options);
     }
 
     return FilterError{parser.errors().join("\n")};
 }
 
-Filter::Filter(ExpressionPtr expression, Type returnType)
+Filter::Filter(ExpressionPtr expression, Type returnType,
+               const OptimizeOptions &options)
     : expression_(std::move(expression))
     , returnType_(returnType)
 {
+    this->expression_->optimize(options);
 }
 
 Type Filter::returnType() const

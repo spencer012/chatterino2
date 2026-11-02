@@ -24,6 +24,22 @@ QVariant UnaryOperation::execute(RunContext context) const
     }
 }
 
+void UnaryOperation::optimize(const OptimizeOptions &options)
+{
+    this->right_->optimize(options);
+}
+
+int UnaryOperation::cost() const
+{
+    return 2 + this->right_->cost();
+}
+
+bool UnaryOperation::alwaysConvertsToBool() const
+{
+    // execute() only returns Bools
+    return true;
+}
+
 PossibleType UnaryOperation::synthesizeType() const
 {
     auto rightSyn = this->right_->synthesizeType();

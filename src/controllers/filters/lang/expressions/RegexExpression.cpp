@@ -18,6 +18,31 @@ QVariant RegexExpression::execute(RunContext /*context*/) const
     return this->regex_;
 }
 
+int RegexExpression::cost() const
+{
+    return 2;
+}
+
+bool RegexExpression::alwaysConvertsToBool() const
+{
+    return QVariant(this->regex_).convert(QMetaType(QMetaType::Bool));
+}
+
+const QString &RegexExpression::pattern() const
+{
+    return this->regexString_;
+}
+
+bool RegexExpression::caseInsensitive() const
+{
+    return this->caseInsensitive_;
+}
+
+const QRegularExpression &RegexExpression::regex() const
+{
+    return this->regex_;
+}
+
 PossibleType RegexExpression::synthesizeType() const
 {
     return TypeClass{Type::RegularExpression};

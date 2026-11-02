@@ -102,6 +102,45 @@ struct IdentifierExpression final : public Expression {
         return this->accessor.fn(context);
     }
 
+    int cost() const override
+    {
+        if (!this->type)
+        {
+            return 2;
+        }
+        switch (*this->type)
+        {
+            case Type::StringList:
+                // author.badges builds a new list every time
+                return 60;
+            default:
+                return 20;
+        }
+    }
+
+    bool alwaysConvertsToBool() const override
+    {
+        if (!this->type)
+        {
+            // The invalid accessor returns false
+            return true;
+        }
+        switch (*this->type)
+        {
+            case Type::Bool:
+            case Type::Int:
+            case Type::String:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool alwaysReturnsString() const override
+    {
+        return this->type == Type::String;
+    }
+
 private:
     QString name;
     std::optional<Type> type;

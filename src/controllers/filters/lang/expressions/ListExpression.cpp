@@ -38,6 +38,24 @@ QVariant ListExpression::execute(RunContext context) const
     return results;
 }
 
+void ListExpression::optimize(const OptimizeOptions &options)
+{
+    for (const auto &exp : this->list_)
+    {
+        exp->optimize(options);
+    }
+}
+
+int ListExpression::cost() const
+{
+    int total = 20;
+    for (const auto &exp : this->list_)
+    {
+        total += exp->cost();
+    }
+    return total;
+}
+
 PossibleType ListExpression::synthesizeType() const
 {
     std::vector<TypeClass> types;

@@ -21,6 +21,13 @@ public:
     QString debug() const override;
     QString filterString() const override;
 
+    int cost() const override;
+    bool alwaysConvertsToBool() const override;
+
+    const QString &pattern() const;
+    bool caseInsensitive() const;
+    const QRegularExpression &regex() const;
+
 private:
     QString regexString_;
     bool caseInsensitive_;
