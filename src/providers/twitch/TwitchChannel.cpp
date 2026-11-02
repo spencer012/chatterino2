@@ -165,6 +165,11 @@ TwitchChannel::TwitchChannel(const QString &name)
             this->lastConnectedAt_ = std::chrono::system_clock::now();
             this->disconnected_ = false;
         }
+        if (!this->joined_)
+        {
+            this->joined_ = true;
+            this->joinedStatusChanged.invoke();
+        }
     });
 
     // timers
@@ -1457,8 +1462,19 @@ void TwitchChannel::markConnected()
     }
 }
 
+bool TwitchChannel::isJoined() const
+{
+    return this->joined_ || this->getName().startsWith("/");
+}
+
 void TwitchChannel::markDisconnected()
 {
+    if (this->joined_)
+    {
+        this->joined_ = false;
+        this->joinedStatusChanged.invoke();
+    }
+
     if (this->roomId().isEmpty())
     {
         // we were never joined in the first place

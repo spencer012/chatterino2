@@ -1304,6 +1304,10 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
             twitchChannel->streamStatusChanged, [this]() {
                 this->liveStatusChanged.invoke();
             });
+        this->channelConnections_.managedConnect(
+            twitchChannel->joinedStatusChanged, [this]() {
+                this->joinedStatusChanged.invoke();
+            });
     }
 }
 

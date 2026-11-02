@@ -73,6 +73,11 @@ public:
     bool isLive() const;
 
     /**
+     * @brief Marks this tab as having a Twitch channel that isn't joined
+     **/
+    void setNotJoined(bool notJoined);
+
+    /**
      * @brief Sets the highlight state of this tab clearing highlight sources
      *
      * Obeys the HighlightsEnabled setting and highlight states hierarchy
@@ -166,6 +171,7 @@ private:
 
     bool isLive_{};
     bool isRerun_{};
+    bool isNotJoined_{};
 
     int growWidth_ = 0;
     QSize computedMinimumSize;

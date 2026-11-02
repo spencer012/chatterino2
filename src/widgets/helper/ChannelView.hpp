@@ -250,6 +250,8 @@ public:
     pajlada::Signals::NoArgSignal selectionChanged;
     pajlada::Signals::Signal<HighlightState> tabHighlightRequested;
     pajlada::Signals::NoArgSignal liveStatusChanged;
+    /// Fires when the underlying Twitch channel is joined or loses its join
+    pajlada::Signals::NoArgSignal joinedStatusChanged;
     pajlada::Signals::Signal<const MessageLayoutElement *,
                              Qt::KeyboardModifiers>
         elementClicked;
