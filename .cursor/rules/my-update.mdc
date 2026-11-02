@@ -267,3 +267,17 @@ This is a fork of an existing open source project with some custom functionality
    - **Behavior Notes**:
      - Only the IRC message path (`makeIrcMessage`) applies these flags. Upstream's subgift and EventSub automod paths add to `/mentions` directly and are not affected.
      - Since upstream's highlight rework (#6695), every highlight type sets `MessageFlag::Highlighted` (`HighlightedWhisper` is gone), including first messages, redemptions, subscriptions and announcements. Suppression therefore applies to those too, not only to user/message/badge highlights.
+
+13. **Not-connected tab indicator**
+   - **Feature**: A tab with a Twitch split whose channel isn't joined gets a 2px orange line (selected-tab thickness, on whichever edge the tab bar uses) and a half-transparent title. Lets you watch tabs connect at startup and see which ones are back after a network drop. Toggle: Settings > General > "Mark tabs with channels that aren't connected" (`/appearance/showTabNotJoined`, default on).
+   - **Files Modified**:
+     - `src/providers/twitch/TwitchChannel.hpp/.cpp` - `isJoined()` and `joinedStatusChanged`. Set by our own JOIN (the existing `joined` signal), cleared by `markDisconnected()` when the read connection drops. Channels starting with `/` (plugin channels, never joined) always count as joined.
+     - `src/widgets/helper/ChannelView.hpp/.cpp` - Forwards it as `joinedStatusChanged`, like `liveStatusChanged`.
+     - `src/widgets/splits/SplitContainer.hpp/.cpp` - `refreshTabJoinedStatus()` on that signal and in `refreshTab()` (split added/removed, channel changed).
+     - `src/widgets/helper/NotebookTab.hpp/.cpp` - `setNotJoined()` and the paint.
+     - `src/singletons/Settings.hpp`, `src/widgets/settingspages/GeneralPage.cpp` - The setting.
+   - **Behavior Notes**:
+     - Only our own JOIN counts. ROOMSTATE/`setRoomId` is not used because `MessageBuilder` also sets the room ID from recent-messages history.
+     - Non-Twitch splits (mentions, whispers, live, automod, empty) never mark the tab.
+     - A channel Twitch refuses to join (suspended, nonexistent) stays marked, since no JOIN ever arrives.
+     - A silently dead connection only shows once Communi notices (ping timeout) and emits `disconnected`.
