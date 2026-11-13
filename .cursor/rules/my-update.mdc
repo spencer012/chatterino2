@@ -5,8 +5,11 @@ alwaysApply: true
 
 ## Delivery and privacy
 
-Commit and push completed requested updates to the fork's current branch unless
-the user directs otherwise. Keep unrelated work out of those commits. Audit the
+The fork's `master` branch (remote `origin`, `spencer012/chatterino2`) is the
+feature branch. It tracks `origin/master` and is kept current by rebasing onto
+`upstream/master` (`Chatterino/chatterino2`). The old `my-fork` branch is retired.
+Commit and push completed requested updates to `master` unless the user directs
+otherwise. Keep unrelated work out of those commits. Audit the
 entire outgoing commit range before pushing, including unpublished history.
 Exclude credentials, personal filesystem paths, raw logs, local session reports
 and log-derived channel/activity data. Publish generic documentation and synthetic
@@ -46,12 +49,12 @@ benchmarks instead. Use a GitHub noreply author address for new commits.
   paint/layout spike counters and the shared event-loop-delay monitor; cumulative
   maxima alone hide later stalls below a startup peak.
 - `Button::effectTimer_` (hover fade and click ripple) only runs while one of
-  those animations is in progress. Upstream starts it in the constructor and never
-  stops it. With ~100 tabs that left ~1,400 always-on 20 ms timers on the GUI
-  thread, so on Windows the message queue never drained and Qt stopped sending
-  posted events: no repaints and no input until a window was dragged. It often
-  happened right after opening a popup. Keep this when merging upstream `Button`
-  changes.
+  those animations is in progress. Upstream used to start it in the constructor
+  and never stop it. With ~100 tabs that left ~1,400 always-on 20 ms timers on the
+  GUI thread, so on Windows the message queue never drained and Qt stopped sending
+  posted events: no repaints and no input until a window was dragged. Upstream
+  #7409 made the same fix, so the fork now uses upstream's `Button` code. Don't
+  reintroduce an always-running timer.
 - Details and probes are documented in `docs/message-cache-controls.md` and
   `docs/message-cache-performance.md`; tests cover images, layouts and channels.
 
