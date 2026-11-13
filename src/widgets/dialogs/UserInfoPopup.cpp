@@ -404,13 +404,15 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
                 this->ui_.localizedNameLabel->setVisible(false);
                 this->ui_.localizedNameCopyButton->setVisible(false);
 
-                // Right-clicking the name or live indicator offers to open
-                // the stream in Streamlink.
-                for (QWidget *widget :
-                     {static_cast<QWidget *>(this->ui_.nameLabel),
-                      static_cast<QWidget *>(this->ui_.localizedNameLabel),
-                      static_cast<QWidget *>(this->ui_.liveIndicator)})
+                // Right-clicking the name offers to open the stream in
+                // Streamlink.
+                for (Label *widget :
+                     {this->ui_.nameLabel, this->ui_.localizedNameLabel})
                 {
+                    // The popup treats widgets without mouse tracking as
+                    // its title bar (to drag it), and Windows then keeps
+                    // right-clicks from reaching them.
+                    widget->setMouseTracking(true);
                     widget->setContextMenuPolicy(Qt::CustomContextMenu);
                     QObject::connect(widget,
                                      &QWidget::customContextMenuRequested, this,
