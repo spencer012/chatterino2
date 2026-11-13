@@ -38,6 +38,7 @@
 #include "util/Helpers.hpp"
 #include "util/IncognitoBrowser.hpp"
 #include "util/QMagicEnum.hpp"
+#include "util/StreamLink.hpp"
 #include "util/Twitch.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/dialogs/ReplyThreadPopup.hpp"
@@ -3343,6 +3344,7 @@ void ChannelView::addTwitchLinkContextMenuItems(
             this->openChannelIn.invoke(twitchUsername,
                                        FromTwitchLinkOpenChannelIn::Streamlink);
         });
+        prefetchStreamQualities(twitchUsername);
 
         if (!getSettings()->customURIScheme.getValue().isEmpty())
         {

@@ -26,6 +26,7 @@
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutHelper.hpp"
+#include "util/StreamLink.hpp"
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
@@ -611,6 +612,10 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
             OPEN_IN_STREAMLINK,
             h->getDisplaySequence(HotkeyCategory::Split, "openInStreamlink"),
             this->split_, &Split::openInStreamlink);
+        QObject::connect(menu.get(), &QMenu::aboutToShow, this, [this] {
+            // Read the channel when shown: the menu is built on mouse press.
+            prefetchStreamQualities(this->split_->getChannel()->getName());
+        });
         menu->addAction("Open most recent VOD", this->split_,
                         &Split::openLatestVodInMpv);
 

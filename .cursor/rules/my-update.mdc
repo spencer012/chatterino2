@@ -217,7 +217,8 @@ This is a fork of an existing open source project with some custom functionality
      - `--config` is sent only when the config file setting is non-empty. Otherwise TwitchPipe uses its own lookup, next to the executable and then the working directory.
      - A normal Streamlink launch still gets the same arguments. The chat system message is `Opening <channel> in Streamlink ...` or `Opening <channel> in TwitchPipe ...`.
      - Upstream #7355 launches Streamlink attached and shows `StreamLinkErrorPopup` with its output on a non-zero exit. The fork keeps detached launches for both backends, so only the Streamlink quality listing uses that popup (stdout/stderr merged, shown when the last line isn't `Available streams:`). A player that fails after it starts is not reported.
-     - Attached quality queries are deleted when they exit. FailedToStart shows one not-found dialog and deletes the process. Detached launches use `startDetached`, show that dialog only from the false return, and delete the `QProcess` without waiting for the player to exit.
+     - Attached quality queries are deleted when they exit. FailedToStart deletes the process and, for a click, shows one not-found dialog (a background prefetch stays quiet). Detached launches use `startDetached`, show that dialog only from the false return, and delete the `QProcess` without waiting for the player to exit.
+     - Quality lists are prefetched and cached per broadcast; see item 16.
      - Holding Shift while starting a launch with quality `Choose` skips the popup and uses `best` for both backends. Hotkeys whose binding lacks Shift will not fire with Shift held, so menu and button triggers are the intended path.
      - The menu label "Open in streamlink", the `/streamlink` command, and the `openInStreamlink` hotkey id are unchanged.
 
@@ -330,3 +331,22 @@ This is a fork of an existing open source project with some custom functionality
      - Folded `contains` relies on Qt folding case per code point; an exhaustive test catches a Qt upgrade that changes this. A single `contains` is not folded (Qt's search stops at the first hit and is faster).
      - Multi-threading was measured and rejected: a thread-pool round trip (~5.8 us) costs as much as all 50 optimized filters, and splitting one message's filters 4 ways made it slower (6.0 -> 27.7 us). Filters still run on the GUI thread.
      - Division or modulo by zero in a filter still crashes, as before.
+
+16. **Streamlink quality prefetch and usercard Streamlink menu**
+   - **Feature**: With quality `Choose` (Streamlink or TwitchPipe), opening a menu that has "Open in streamlink" lists the stream's qualities in the background, so clicking it right after shows the quality popup without waiting for Streamlink. The list is cached per broadcast. Right-clicking the name, localized name or live indicator in a usercard shows "Open in streamlink" while the user is live, or a disabled "Open in streamlink (not live)".
+   - **Files Added**:
+     - `src/util/StreamQualityCache.hpp/.cpp` - `StreamQualityCache` (GUI thread only): entries keyed by player + login (+ TwitchPipe config path), tied to the Twitch stream ID they were listed for. `prefetch` starts a quiet background fetch, and `request` returns the cached list, waits for the running fetch or starts one. Also `twitchLoginOf` (bare login or `twitch.tv/<login>` URL to lowercase login).
+   - **Files Modified**:
+     - `src/util/StreamLink.hpp/.cpp` - `prefetchStreamQualities(channelOrUrl)`. Quality listing returns a `StreamQualityListing` with a `reportError` closure instead of showing errors directly, so failures only show when a click is waiting. `runQualityListing` calls back exactly once, including on FailedToStart (an entry can't stay "fetching"). The Choose path goes through the cache.
+     - `src/widgets/splits/SplitHeader.cpp` - Main menu `aboutToShow` prefetches the split's channel (read at show time; the menu is built on mouse press).
+     - `src/widgets/helper/ChannelView.cpp` - twitch.tv link context menu prefetches the linked channel.
+     - `src/widgets/FollowedChannelsWindow.cpp` - Row context menu prefetches the channel.
+     - `src/widgets/dialogs/UserInfoPopup.hpp/.cpp` - `liveLogin_` (from the Helix stream lookup the live indicator already does) and `showNameContextMenu`, which also prefetches.
+     - `tests/src/StreamLink.cpp` - `StreamQualityCache` and `twitchLoginOf` tests.
+   - **Behavior Notes**:
+     - The stream ID comes from the joined `TwitchChannel`'s stream status when that channel is open (no request). Otherwise a Helix `getStreamByName` lookup is made and reused for 60 seconds, so a click right after a menu doesn't wait for another one.
+     - Offline (or unknown) means no background fetch, and the entry is dropped. A broadcast that ends and restarts has a new stream ID, so its list is fetched again. Within one broadcast the list is never refetched; this assumes the quality set doesn't change while a stream is live.
+     - A click while the prefetch is still running waits for it instead of starting a second process. A fetch running longer than 30 seconds is treated as hung and replaced.
+     - A target that isn't a Twitch login/URL (e.g. `/streamlink` with another site) is never cached and behaves as before. Shift (best) and non-Choose qualities never list qualities and are unchanged.
+     - The listing runs against `twitch.tv/<login>` (Streamlink) or the bare login (TwitchPipe). The quality popup still receives the URL/target of the click.
+     - The raid banner button, toasts, hotkey and `/streamlink` use the cache when an entry exists but don't prefetch.

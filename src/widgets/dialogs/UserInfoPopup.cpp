@@ -31,6 +31,7 @@
 #include "util/Helpers.hpp"
 #include "util/LayoutCreator.hpp"
 #include "util/PostToThread.hpp"
+#include "util/StreamLink.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/PixmapButton.hpp"
 #include "widgets/dialogs/EditUserNotesDialog.hpp"
@@ -388,6 +389,22 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
 
                 this->ui_.localizedNameLabel->setVisible(false);
                 this->ui_.localizedNameCopyButton->setVisible(false);
+
+                // Right-clicking the name or live indicator offers to open
+                // the stream in Streamlink.
+                for (QWidget *widget :
+                     {static_cast<QWidget *>(this->ui_.nameLabel),
+                      static_cast<QWidget *>(this->ui_.localizedNameLabel),
+                      static_cast<QWidget *>(this->ui_.liveIndicator)})
+                {
+                    widget->setContextMenuPolicy(Qt::CustomContextMenu);
+                    QObject::connect(widget,
+                                     &QWidget::customContextMenuRequested, this,
+                                     [this, widget](QPoint pos) {
+                                         this->showNameContextMenu(
+                                             widget->mapToGlobal(pos));
+                                     });
+                }
 
                 // button to pin the window (only if we close automatically)
                 if (this->closeAutomatically_)
@@ -1044,11 +1061,13 @@ void UserInfoPopup::updateUserData()
 
                 if (isLive)
                 {
+                    this->liveLogin_ = stream.userLogin;
                     this->ui_.liveIndicator->setViewers(stream.viewerCount);
                     this->ui_.liveIndicator->show();
                 }
                 else
                 {
+                    this->liveLogin_.clear();
                     this->ui_.liveIndicator->hide();
                 }
             },
@@ -1214,6 +1233,27 @@ void UserInfoPopup::updateUserData()
             this->userName_, Qt::CaseInsensitive) == 0;
     this->ui_.block->setVisible(!isMyself);
     this->ui_.ignoreHighlights->setVisible(!isMyself);
+}
+
+void UserInfoPopup::showNameContextMenu(QPoint globalPos)
+{
+    auto *menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+
+    if (this->liveLogin_.isEmpty())
+    {
+        menu->addAction("Open in streamlink (not live)")->setEnabled(false);
+    }
+    else
+    {
+        const auto login = this->liveLogin_;
+        menu->addAction("Open in &streamlink", [login] {
+            openStreamlinkForChannelOrUrl(login);
+        });
+        prefetchStreamQualities(login);
+    }
+
+    menu->popup(globalPos);
 }
 
 void UserInfoPopup::loadAvatar(const QUrl &url)

@@ -37,4 +37,11 @@ void openStreamlink(const QString &url, const QString &quality,
 // quality is "Choose".
 void openStreamlinkForChannelOrUrl(const QString &channelOrUrl);
 
+// Call when showing a menu that offers to open channelOrUrl in the stream
+// player. When the quality setting is "Choose" and the channel is live, this
+// lists the stream's qualities in the background so the quality popup can
+// open right away. The list is kept until the stream goes offline. Failures
+// are silent.
+void prefetchStreamQualities(const QString &channelOrUrl);
+
 }  // namespace chatterino

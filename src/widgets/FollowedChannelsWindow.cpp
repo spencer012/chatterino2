@@ -662,6 +662,7 @@ void FollowedChannelsWindow::showContextMenu(QPoint position)
     menu->addAction("Open in &streamlink", this, [channel] {
         openStreamlinkForChannelOrUrl(channel);
     });
+    prefetchStreamQualities(channel);
     if (!getSettings()->customURIScheme.getValue().isEmpty())
     {
         menu->addAction("Open in custom &player", this, [channel] {

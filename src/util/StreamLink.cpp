@@ -9,8 +9,12 @@
 #include "common/LinkParser.hpp"
 #include "common/QLogging.hpp"
 #include "common/Version.hpp"
+#include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/TwitchChannel.hpp"
+#include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/WindowManager.hpp"
+#include "util/StreamQualityCache.hpp"
 #include "widgets/dialogs/QualityPopup.hpp"
 #include "widgets/dialogs/StreamLinkErrorPopup.hpp"
 #include "widgets/Notebook.hpp"
@@ -19,10 +23,13 @@
 
 #include <QErrorMessage>
 #include <QGuiApplication>
+#include <QHash>
 #include <QProcess>
 #include <QStringBuilder>
 
+#include <chrono>
 #include <functional>
+#include <memory>
 
 namespace {
 
@@ -171,18 +178,61 @@ QProcess *createStreamlinkProcess(StreamPlayerBackend backend)
     return process;
 }
 
-// Connect after any finished handler that still needs the process. FailedToStart
-// does not emit finished. Other errors can emit both signals; deleteLater twice
-// is safe, but deleting from errorOccurred before finished can free the process
-// while a finished handler is still using it.
-void bindAttachedProcessLifetime(QProcess *process, StreamPlayerBackend backend)
+ChannelPtr selectedSplitChannel()
 {
+    SplitContainer *currentPage = getApp()
+                                      ->getWindows()
+                                      ->getLastSelectedWindow()
+                                      ->getNotebook()
+                                      .getSelectedPage();
+    if (currentPage == nullptr)
+    {
+        return nullptr;
+    }
+
+    auto *currentSplit = currentPage->getSelectedSplit();
+    if (currentSplit == nullptr)
+    {
+        return nullptr;
+    }
+
+    return currentSplit->getChannel();
+}
+
+// Runs a quality listing process and calls done exactly once. parse turns the
+// exit code and output into the result. Errors are only shown when the
+// result's reportError is called, so a prefetch can fail quietly.
+void runQualityListing(
+    QProcess *process, StreamPlayerBackend backend,
+    std::function<StreamQualityListing(int exitCode, QProcess *process)> parse,
+    StreamQualityCache::DoneCallback done)
+{
+    auto pending =
+        std::make_shared<StreamQualityCache::DoneCallback>(std::move(done));
+    auto finish = [pending](StreamQualityListing listing) {
+        if (!*pending)
+        {
+            return;
+        }
+        auto callback = std::move(*pending);
+        *pending = nullptr;
+        callback(std::move(listing));
+    };
+
+    // FailedToStart does not emit finished. Other errors can emit both
+    // signals; deleteLater twice is safe.
     QObject::connect(process, &QProcess::errorOccurred, process,
-                     [=](QProcess::ProcessError err) {
+                     [process, backend, finish](QProcess::ProcessError err) {
                          if (err == QProcess::FailedToStart)
                          {
-                             showStreamlinkNotFoundError(backend);
                              process->deleteLater();
+                             finish({
+                                 .qualities = {},
+                                 .reportError =
+                                     [backend] {
+                                         showStreamlinkNotFoundError(backend);
+                                     },
+                             });
                              return;
                          }
 
@@ -194,13 +244,21 @@ void bindAttachedProcessLifetime(QProcess *process, StreamPlayerBackend backend)
         process,
         static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(
             &QProcess::finished),
-        process, [=](int /*exitCode*/, QProcess::ExitStatus /*exitStatus*/) {
+        process,
+        [process, parse = std::move(parse), finish](
+            int exitCode, QProcess::ExitStatus /*exitStatus*/) {
+            // Read the output before calling back: showing UI can process
+            // events.
+            auto listing = parse(exitCode, process);
             process->deleteLater();
+            finish(std::move(listing));
         });
+
+    process->start();
 }
 
-void getTwitchPipeStreams(const QString &channel, const ChannelPtr &channelPtr,
-                          std::function<void(QStringList)> cb)
+void getTwitchPipeStreams(const QString &channel,
+                          StreamQualityCache::DoneCallback done)
 {
     auto *process = createStreamlinkProcess(StreamPlayerBackend::TwitchPipe);
 
@@ -215,14 +273,9 @@ void getTwitchPipeStreams(const QString &channel, const ChannelPtr &channelPtr,
          << QStringLiteral("--streams") << channel;
     process->setArguments(args);
 
-    QObject::connect(
-        process,
-        static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(
-            &QProcess::finished),
-        process,
-        [process, cb = std::move(cb), channelPtr](
-            int exitCode, QProcess::ExitStatus /*exitStatus*/) {
-            // Copy before any callback. Showing UI can process events.
+    runQualityListing(
+        process, StreamPlayerBackend::TwitchPipe,
+        [](int exitCode, QProcess *process) -> StreamQualityListing {
             const auto stdoutText = QString(process->readAllStandardOutput());
             const auto stderrText = QString(process->readAllStandardError());
 
@@ -233,93 +286,57 @@ void getTwitchPipeStreams(const QString &channel, const ChannelPtr &channelPtr,
                     lines.isEmpty() ? QString() : lines.last();
                 qCWarning(chatterinoStreamlink)
                     << "Got error code" << exitCode << lastLine;
-                if (channelPtr && !lastLine.isEmpty())
-                {
-                    channelPtr->addSystemMessage(lastLine);
-                }
-                return;
+                return {
+                    .qualities = {},
+                    .reportError =
+                        [lastLine] {
+                            auto channel = selectedSplitChannel();
+                            if (channel && !lastLine.isEmpty())
+                            {
+                                channel->addSystemMessage(lastLine);
+                            }
+                        },
+                };
             }
 
-            cb(nonEmptyLines(stdoutText));
-        });
-
-    bindAttachedProcessLifetime(process, StreamPlayerBackend::TwitchPipe);
-    process->start();
+            return {
+                .qualities = nonEmptyLines(stdoutText),
+                .reportError = {},
+            };
+        },
+        std::move(done));
 }
-
-// Choose reads the live modifier because launch callers do not pass the event.
-// The quality popup's OK button calls openStreamlink directly and skips this.
-bool shiftHeldForBest()
-{
-    return QGuiApplication::queryKeyboardModifiers().testFlag(
-        Qt::ShiftModifier);
-}
-
-void launchTwitchPipe(const QString &channelOrUrl, const ChannelPtr &channel)
-{
-    const QString target = twitchPipeTarget(channelOrUrl);
-    const auto preferred = getSettings()->twitchpipeQuality.getEnum();
-
-    if (preferred == TwitchPipeQuality::Choose)
-    {
-        if (shiftHeldForBest())
-        {
-            openStreamlink(target, QStringLiteral("best"), {});
-            return;
-        }
-
-        getTwitchPipeStreams(target, channel, [target](QStringList options) {
-            QualityPopup::showDialog(target, std::move(options));
-        });
-        return;
-    }
-
-    QString quality;
-    if (preferred == TwitchPipeQuality::Best)
-    {
-        quality = QStringLiteral("best");
-    }
-    else if (preferred == TwitchPipeQuality::Custom)
-    {
-        quality = getSettings()->twitchpipeQualityPriority.getValue().trimmed();
-        if (quality.isEmpty())
-        {
-            quality = QStringLiteral("best");
-        }
-    }
-
-    openStreamlink(target, quality, {});
-}
-
-}  // namespace
-
-namespace chatterino {
 
 void getStreamQualities(const QString &channelURL,
-                        std::function<void(QStringList)> cb)
+                        StreamQualityCache::DoneCallback done)
 {
     auto *p = createStreamlinkProcess(StreamPlayerBackend::Streamlink);
     // Streamlink prints its errors to stdout, but merge stderr too so the
     // error popup shows everything.
     p->setProcessChannelMode(QProcess::MergedChannels);
+    p->setArguments(p->arguments() +
+                    QStringList{channelURL, "--default-stream=KKona"});
 
-    QObject::connect(
-        p,
-        static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(
-            &QProcess::finished),
-        [=](int exitCode, QProcess::ExitStatus /*exitStatus*/) {
+    runQualityListing(
+        p, StreamPlayerBackend::Streamlink,
+        [channelURL](int exitCode, QProcess *p) -> StreamQualityListing {
             const auto stdoutText = QString(p->readAllStandardOutput());
             if (exitCode != 0)
             {
                 qCWarning(chatterinoStreamlink) << "Got error code" << exitCode;
-                // return;
             }
             QString lastLine = stdoutText;
             lastLine = lastLine.trimmed().split('\n').last().trimmed();
             if (!lastLine.startsWith("Available streams: "))
             {
-                StreamLinkErrorPopup::showError(channelURL, stdoutText);
-                return;
+                return {
+                    .qualities = {},
+                    .reportError =
+                        [channelURL, stdoutText] {
+                            StreamLinkErrorPopup::showError(channelURL,
+                                                            stdoutText);
+                        },
+                };
             }
 
             QStringList options;
@@ -353,16 +370,200 @@ void getStreamQualities(const QString &channelURL,
                 }
             }
 
-            cb(options);
-        });
-
-    bindAttachedProcessLifetime(p, StreamPlayerBackend::Streamlink);
-
-    p->setArguments(p->arguments() +
-                    QStringList{channelURL, "--default-stream=KKona"});
-
-    p->start();
+            return {
+                .qualities = options,
+                .reportError = {},
+            };
+        },
+        std::move(done));
 }
+
+StreamQualityCache &qualityCache()
+{
+    static StreamQualityCache cache;
+    return cache;
+}
+
+bool choosesQuality(StreamPlayerBackend backend)
+{
+    if (backend == StreamPlayerBackend::TwitchPipe)
+    {
+        return getSettings()->twitchpipeQuality.getEnum() ==
+               TwitchPipeQuality::Choose;
+    }
+    return getSettings()->preferredQuality.getEnum() ==
+           StreamLinkPreferredQuality::Choose;
+}
+
+QString qualityCacheKey(StreamPlayerBackend backend, const QString &login)
+{
+    if (backend == StreamPlayerBackend::TwitchPipe)
+    {
+        // TwitchPipe's config can change what it lists (e.g. its auth).
+        return u"twitchpipe|" %
+               getSettings()->twitchpipeConfigPath.getValue().trimmed() %
+               u"|" % login;
+    }
+    return u"streamlink|" % login;
+}
+
+// What the listing runs against. The quality popup still gets the target the
+// user asked for; the qualities are the same either way.
+QString qualityListTarget(StreamPlayerBackend backend, const QString &login)
+{
+    if (backend == StreamPlayerBackend::TwitchPipe)
+    {
+        return login;
+    }
+    return QStringLiteral("twitch.tv/") + login;
+}
+
+StreamQualityCache::Fetcher qualityFetcher(StreamPlayerBackend backend,
+                                           const QString &target)
+{
+    return [backend, target](StreamQualityCache::DoneCallback done) {
+        if (backend == StreamPlayerBackend::TwitchPipe)
+        {
+            getTwitchPipeStreams(target, std::move(done));
+        }
+        else
+        {
+            getStreamQualities(target, std::move(done));
+        }
+    };
+}
+
+// How long a Helix lookup for a channel that isn't open is reused, so a click
+// right after opening a menu doesn't wait for another one.
+constexpr std::chrono::seconds STREAM_CHECK_REUSE{60};
+
+struct StreamCheck {
+    QString streamId;
+    std::chrono::steady_clock::time_point checkedAt;
+};
+
+QHash<QString, StreamCheck> &recentStreamChecks()
+{
+    static QHash<QString, StreamCheck> checks;
+    return checks;
+}
+
+// Calls cb with the ID of login's current broadcast, or an empty string when
+// it's offline or that can't be told. Each broadcast has its own ID, so a
+// stream that went offline and came back gets a new one.
+void currentStreamId(const QString &login,
+                     const std::function<void(const QString &)> &cb)
+{
+    // An open channel already keeps its stream status up to date.
+    auto *twitchChannel = dynamic_cast<TwitchChannel *>(
+        getApp()->getTwitch()->getChannelOrEmpty(login).get());
+    if (twitchChannel != nullptr)
+    {
+        cb(twitchChannel->getCurrentStreamID());
+        return;
+    }
+
+    auto &checks = recentStreamChecks();
+    auto it = checks.find(login);
+    if (it != checks.end() &&
+        std::chrono::steady_clock::now() - it->checkedAt < STREAM_CHECK_REUSE)
+    {
+        cb(it->streamId);
+        return;
+    }
+
+    getHelix()->getStreamByName(
+        login,
+        [login, cb](bool isLive, const HelixStream &stream) {
+            const QString streamId = isLive ? stream.id : QString();
+            recentStreamChecks().insert(
+                login, {
+                           .streamId = streamId,
+                           .checkedAt = std::chrono::steady_clock::now(),
+                       });
+            cb(streamId);
+        },
+        [cb] {
+            cb({});
+        },
+        [] {});
+}
+
+// Shows the quality popup for target. Uses the cached list when the stream is
+// still the broadcast it was listed for. Errors are reported.
+void chooseQuality(StreamPlayerBackend backend, const QString &channelOrUrl,
+                   const QString &target)
+{
+    auto showPopup = [target](const QStringList &qualities) {
+        QualityPopup::showDialog(target, qualities);
+    };
+
+    const auto login = twitchLoginOf(channelOrUrl);
+    if (login.isEmpty())
+    {
+        // Not a Twitch channel, so there's no stream ID to cache by.
+        qualityCache().request({}, {}, qualityFetcher(backend, target),
+                               showPopup);
+        return;
+    }
+
+    const auto key = qualityCacheKey(backend, login);
+    const auto listTarget = qualityListTarget(backend, login);
+    currentStreamId(login, [=](const QString &streamId) {
+        if (streamId.isEmpty())
+        {
+            qualityCache().forget(key);
+        }
+        qualityCache().request(key, streamId,
+                               qualityFetcher(backend, listTarget), showPopup);
+    });
+}
+
+// Choose reads the live modifier because launch callers do not pass the event.
+// The quality popup's OK button calls openStreamlink directly and skips this.
+bool shiftHeldForBest()
+{
+    return QGuiApplication::queryKeyboardModifiers().testFlag(
+        Qt::ShiftModifier);
+}
+
+void launchTwitchPipe(const QString &channelOrUrl)
+{
+    const QString target = twitchPipeTarget(channelOrUrl);
+    const auto preferred = getSettings()->twitchpipeQuality.getEnum();
+
+    if (preferred == TwitchPipeQuality::Choose)
+    {
+        if (shiftHeldForBest())
+        {
+            openStreamlink(target, QStringLiteral("best"), {});
+            return;
+        }
+
+        chooseQuality(StreamPlayerBackend::TwitchPipe, channelOrUrl, target);
+        return;
+    }
+
+    QString quality;
+    if (preferred == TwitchPipeQuality::Best)
+    {
+        quality = QStringLiteral("best");
+    }
+    else if (preferred == TwitchPipeQuality::Custom)
+    {
+        quality = getSettings()->twitchpipeQualityPriority.getValue().trimmed();
+        if (quality.isEmpty())
+        {
+            quality = QStringLiteral("best");
+        }
+    }
+
+    openStreamlink(target, quality, {});
+}
+
+}  // namespace
+
+namespace chatterino {
 
 void openStreamlink(const QString &url, const QString &quality,
                     QStringList extraArguments)
@@ -422,27 +623,15 @@ void openStreamlinkForChannelOrUrl(const QString &channelOrUrl)
 {
     const auto backend = currentBackend();
 
-    ChannelPtr channel;
-    SplitContainer *currentPage = getApp()
-                                      ->getWindows()
-                                      ->getLastSelectedWindow()
-                                      ->getNotebook()
-                                      .getSelectedPage();
-    if (currentPage != nullptr)
+    if (auto channel = selectedSplitChannel())
     {
-        auto *currentSplit = currentPage->getSelectedSplit();
-        if (currentSplit != nullptr)
-        {
-            channel = currentSplit->getChannel();
-            channel->addSystemMessage(
-                QStringLiteral("Opening %1 in %2 ...")
-                    .arg(channelOrUrl, backendName(backend)));
-        }
+        channel->addSystemMessage(QStringLiteral("Opening %1 in %2 ...")
+                                      .arg(channelOrUrl, backendName(backend)));
     }
 
     if (backend == StreamPlayerBackend::TwitchPipe)
     {
-        launchTwitchPipe(channelOrUrl, channel);
+        launchTwitchPipe(channelOrUrl);
         return;
     }
 
@@ -466,10 +655,7 @@ void openStreamlinkForChannelOrUrl(const QString &channelOrUrl)
             return;
         }
 
-        getStreamQualities(url, [=](QStringList qualityOptions) {
-            QualityPopup::showDialog(url, qualityOptions);
-        });
-
+        chooseQuality(StreamPlayerBackend::Streamlink, channelOrUrl, url);
         return;
     }
 
@@ -509,6 +695,35 @@ void openStreamlinkForChannelOrUrl(const QString &channelOrUrl)
     }
 
     openStreamlink(url, quality, args);
+}
+
+void prefetchStreamQualities(const QString &channelOrUrl)
+{
+    const auto backend = currentBackend();
+    if (!choosesQuality(backend))
+    {
+        return;
+    }
+
+    const auto login = twitchLoginOf(channelOrUrl);
+    if (login.isEmpty())
+    {
+        return;
+    }
+
+    const auto key = qualityCacheKey(backend, login);
+    const auto listTarget = qualityListTarget(backend, login);
+    currentStreamId(login, [=](const QString &streamId) {
+        if (streamId.isEmpty())
+        {
+            // Offline, or it can't be told. Either way don't start the player
+            // in the background; a click lists qualities as usual.
+            qualityCache().forget(key);
+            return;
+        }
+        qualityCache().prefetch(key, streamId,
+                                qualityFetcher(backend, listTarget));
+    });
 }
 
 }  // namespace chatterino

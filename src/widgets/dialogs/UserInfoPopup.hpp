@@ -51,6 +51,7 @@ private:
     void updateUserData();
     void updateLatestMessages();
     void updateNotes();
+    void showNameContextMenu(QPoint globalPos);
 
     void loadAvatar(const QUrl &url);
     bool isMod_{};
@@ -61,6 +62,8 @@ private:
     QString userName_;
     QString userId_;
     QString avatarUrl_;
+    /// The user's login while they're live, empty otherwise.
+    QString liveLogin_;
 
     // The channel the popup was opened from (e.g. /mentions or #forsen). Can be a special channel.
     ChannelPtr channel_;

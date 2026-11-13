@@ -690,6 +690,8 @@ set(SOURCE_FILES
         util/SignalListener.hpp
         util/StreamLink.cpp
         util/StreamLink.hpp
+        util/StreamQualityCache.cpp
+        util/StreamQualityCache.hpp
         util/StreamQualitySort.cpp
         util/StreamQualitySort.hpp
         util/TabHistory.cpp
