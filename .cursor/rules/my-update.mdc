@@ -343,7 +343,7 @@ This is a fork of an existing open source project with some custom functionality
      - Division or modulo by zero in a filter still crashes, as before.
 
 16. **Streamlink quality prefetch and usercard Streamlink menu**
-   - **Feature**: With quality `Choose` (Streamlink or TwitchPipe), opening a menu that has "Open in streamlink" lists the stream's qualities in the background, so clicking it right after shows the quality popup without waiting for Streamlink. The list is cached per broadcast. Right-clicking the name, localized name or live indicator in a usercard shows "Open in streamlink" while the user is live, or a disabled "Open in streamlink (not live)".
+   - **Feature**: With quality `Choose` (Streamlink or TwitchPipe), opening a menu that has "Open in streamlink" lists the stream's qualities in the background, so clicking it right after shows the quality popup without waiting for Streamlink. The list is cached per broadcast. In a usercard, the avatar right-click menu ends with "Open in streamlink" while the user is live (disabled "Open in streamlink (not live)" otherwise), and right-clicking the name, localized name or live indicator shows the same item on its own.
    - **Files Added**:
      - `src/util/StreamQualityCache.hpp/.cpp` - `StreamQualityCache` (GUI thread only): entries keyed by player + login (+ TwitchPipe config path), tied to the Twitch stream ID they were listed for. `prefetch` starts a quiet background fetch, and `request` returns the cached list, waits for the running fetch or starts one. Also `twitchLoginOf` (bare login or `twitch.tv/<login>` URL to lowercase login).
    - **Files Modified**:
@@ -351,7 +351,7 @@ This is a fork of an existing open source project with some custom functionality
      - `src/widgets/splits/SplitHeader.cpp` - Main menu `aboutToShow` prefetches the split's channel (read at show time; the menu is built on mouse press).
      - `src/widgets/helper/ChannelView.cpp` - twitch.tv link context menu prefetches the linked channel.
      - `src/widgets/FollowedChannelsWindow.cpp` - Row context menu prefetches the channel.
-     - `src/widgets/dialogs/UserInfoPopup.hpp/.cpp` - `liveLogin_` (from the Helix stream lookup the live indicator already does) and `showNameContextMenu`, which also prefetches.
+     - `src/widgets/dialogs/UserInfoPopup.hpp/.cpp` - `liveLogin_` (from the Helix stream lookup the live indicator already does), `addStreamlinkAction` (adds the item and prefetches; used by the avatar menu and `showNameContextMenu`).
      - `tests/src/StreamLink.cpp` - `StreamQualityCache` and `twitchLoginOf` tests.
    - **Behavior Notes**:
      - The stream ID comes from the joined `TwitchChannel`'s stream status when that channel is open (no request). Otherwise a Helix `getStreamByName` lookup is made and reused for 60 seconds, so a click right after a menu doesn't wait for another one.

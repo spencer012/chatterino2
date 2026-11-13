@@ -11,6 +11,7 @@
 #include <QPointer>
 
 class QCheckBox;
+class QMenu;
 
 namespace chatterino {
 
@@ -51,6 +52,9 @@ private:
     void updateUserData();
     void updateLatestMessages();
     void updateNotes();
+    /// Adds "Open in streamlink" (disabled while not live) and prefetches
+    /// the stream's qualities.
+    void addStreamlinkAction(QMenu *menu);
     void showNameContextMenu(QPoint globalPos);
 
     void loadAvatar(const QUrl &url);

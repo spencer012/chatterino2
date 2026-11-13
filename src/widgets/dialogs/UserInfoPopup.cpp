@@ -358,6 +358,7 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
                                 split->setChannel(channel);
                                 container->insertSplit(split);
                             });
+                        this->addStreamlinkAction(menu);
                         menu->popup(QCursor::pos());
                         menu->raise();
                     }
@@ -1248,24 +1249,26 @@ void UserInfoPopup::updateUserData()
     this->ui_.ignoreHighlights->setVisible(!isMyself);
 }
 
+void UserInfoPopup::addStreamlinkAction(QMenu *menu)
+{
+    if (this->liveLogin_.isEmpty())
+    {
+        menu->addAction("Open in streamlink (not live)")->setEnabled(false);
+        return;
+    }
+
+    const auto login = this->liveLogin_;
+    menu->addAction("Open in &streamlink", [login] {
+        openStreamlinkForChannelOrUrl(login);
+    });
+    prefetchStreamQualities(login);
+}
+
 void UserInfoPopup::showNameContextMenu(QPoint globalPos)
 {
     auto *menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
-
-    if (this->liveLogin_.isEmpty())
-    {
-        menu->addAction("Open in streamlink (not live)")->setEnabled(false);
-    }
-    else
-    {
-        const auto login = this->liveLogin_;
-        menu->addAction("Open in &streamlink", [login] {
-            openStreamlinkForChannelOrUrl(login);
-        });
-        prefetchStreamQualities(login);
-    }
-
+    this->addStreamlinkAction(menu);
     menu->popup(globalPos);
 }
 
