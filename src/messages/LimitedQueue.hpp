@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -99,6 +100,28 @@ public:
             items.end() - std::min(items.size(), this->buffer_.capacity()),
             items.end());
         ++this->revision_;
+    }
+
+    void replaceAll(std::vector<T> &&items)
+    {
+        std::unique_lock lock(this->mutex_);
+        this->buffer_.assign(
+            this->buffer_.capacity(),
+            std::make_move_iterator(
+                items.end() - std::min(items.size(), this->buffer_.capacity())),
+            std::make_move_iterator(items.end()));
+        ++this->revision_;
+    }
+
+    /// Removes all items and returns them, oldest first.
+    std::vector<T> takeAll()
+    {
+        std::unique_lock lock(this->mutex_);
+        std::vector<T> items(std::make_move_iterator(this->buffer_.begin()),
+                             std::make_move_iterator(this->buffer_.end()));
+        this->buffer_.clear();
+        ++this->revision_;
+        return items;
     }
 
     /**

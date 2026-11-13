@@ -107,6 +107,8 @@ public:
     void addHighlightsAtStart(
         const std::vector<ScrollbarHighlight> &highlights_);
     void replaceHighlight(size_t index, ScrollbarHighlight replacement);
+    /// Replaces all highlights with the newest ones of @a highlights that fit.
+    void setHighlights(std::vector<ScrollbarHighlight> &&highlights);
 
     void clearHighlights();
     void setMessageLimit(size_t limit);

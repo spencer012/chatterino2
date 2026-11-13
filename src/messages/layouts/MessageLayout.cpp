@@ -64,12 +64,20 @@ const MessagePtr &MessageLayout::getMessagePtr() const
 // Height
 int MessageLayout::getHeight() const
 {
-    return static_cast<int>(this->container_.getHeight());
+    if (!this->container_)
+    {
+        return 0;
+    }
+    return static_cast<int>(this->container_->getHeight());
 }
 
 int MessageLayout::getWidth() const
 {
-    return static_cast<int>(this->container_.getWidth());
+    if (!this->container_)
+    {
+        return 0;
+    }
+    return static_cast<int>(this->container_->getWidth());
 }
 
 // Layout
@@ -119,9 +127,9 @@ bool MessageLayout::layout(const MessageLayoutContext &ctx,
         return false;
     }
 
-    qreal oldHeight = this->container_.getHeight();
+    qreal oldHeight = this->container_ ? this->container_->getHeight() : 0;
     this->actuallyLayout(ctx);
-    if (widthChanged || this->container_.getHeight() != oldHeight)
+    if (widthChanged || this->container_->getHeight() != oldHeight)
     {
         this->deleteBuffer();
     }
@@ -154,8 +162,12 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
     bool hideSimilar = getSettings()->hideSimilar;
     bool hideReplies = !ctx.flags.has(MessageElementFlag::RepliedMessage);
 
-    this->container_.beginLayout(ctx.width, this->scale_, this->imageScale_,
-                                 messageFlags);
+    if (!this->container_)
+    {
+        this->container_ = std::make_unique<MessageLayoutContainer>();
+    }
+    this->container_->beginLayout(ctx.width, this->scale_, this->imageScale_,
+                                  messageFlags);
 
     for (const auto &element : this->message_->elements)
     {
@@ -206,20 +218,20 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
             continue;
         }
 
-        element->addToContainer(this->container_, ctx);
+        element->addToContainer(*this->container_, ctx);
     }
 
-    if (this->height_ != this->container_.getHeight())
+    if (this->height_ != this->container_->getHeight())
     {
         this->deleteBuffer();
     }
 
-    this->container_.endLayout();
-    this->height_ = this->container_.getHeight();
+    this->container_->endLayout();
+    this->height_ = this->container_->getHeight();
 
     // collapsed state
     this->flags.unset(MessageLayoutFlag::Collapsed);
-    if (this->container_.isCollapsed())
+    if (this->container_->isCollapsed())
     {
         this->flags.set(MessageLayoutFlag::Collapsed);
     }
@@ -229,6 +241,10 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
 MessagePaintResult MessageLayout::paint(const MessagePaintContext &ctx)
 {
     MessagePaintResult result;
+    if (!this->container_)
+    {
+        return result;
+    }
 
     QPixmap *pixmap = this->ensureBuffer(ctx.painter, ctx.canvasWidth,
                                          ctx.messageColors.hasTransparency);
@@ -247,7 +263,7 @@ MessagePaintResult MessageLayout::paint(const MessagePaintContext &ctx)
 
     // draw gif emotes
     result.hasAnimatedElements =
-        this->container_.paintAnimatedElements(ctx.painter, ctx.y);
+        this->container_->paintAnimatedElements(ctx.painter, ctx.y);
 
     // draw disabled
     if (this->message_->flags.has(MessageFlag::Disabled))
@@ -278,8 +294,8 @@ MessagePaintResult MessageLayout::paint(const MessagePaintContext &ctx)
     // draw selection
     if (!ctx.selection.isEmpty())
     {
-        this->container_.paintSelection(ctx.painter, ctx.messageIndex,
-                                        ctx.selection, ctx.y);
+        this->container_->paintSelection(ctx.painter, ctx.messageIndex,
+                                         ctx.selection, ctx.y);
     }
 
     // draw message seperation line
@@ -315,7 +331,7 @@ MessagePaintResult MessageLayout::paint(const MessagePaintContext &ctx)
         ctx.painter.fillRect(
             QRectF{
                 0,
-                ctx.y + this->container_.getHeight() - 1,
+                ctx.y + this->container_->getHeight() - 1,
                 static_cast<qreal>(pixmap->width()),
                 1,
             },
@@ -337,7 +353,7 @@ QPixmap *MessageLayout::ensureBuffer(QPainter &painter, qreal width, bool clear)
     // Create new buffer
     this->buffer_ = std::make_unique<QPixmap>(
         static_cast<int>(width * painter.device()->devicePixelRatioF()),
-        static_cast<int>(this->container_.getHeight() *
+        static_cast<int>(this->container_->getHeight() *
                          painter.device()->devicePixelRatioF()));
     this->buffer_->setDevicePixelRatio(painter.device()->devicePixelRatioF());
 
@@ -396,7 +412,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     painter.fillRect(buffer->rect(), backgroundColor);
 
     // draw message
-    this->container_.paintElements(painter, ctx);
+    this->container_->paintElements(painter, ctx);
 
 #ifdef FOURTF
     // debug
@@ -407,7 +423,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     QTextOption option;
     option.setAlignment(Qt::AlignRight | Qt::AlignTop);
 
-    painter.drawText(QRectF(1, 1, this->container_.getWidth() - 3, 1000),
+    painter.drawText(QRectF(1, 1, this->container_->getWidth() - 3, 1000),
                      QString::number(this->layoutCount_) + ", " +
                          QString::number(++this->bufferUpdatedCount_),
                      option);
@@ -433,7 +449,10 @@ void MessageLayout::deleteCache()
 {
     this->deleteBuffer();
 
-    this->container_.clearLayout();
+    if (this->container_)
+    {
+        this->container_->clearLayout();
+    }
     this->flags.set(MessageLayoutFlag::RequiresLayout);
 }
 
@@ -445,8 +464,12 @@ void MessageLayout::deleteCache()
 // fourtf: this should return a MessageLayoutItem
 const MessageLayoutElement *MessageLayout::getElementAt(QPointF point) const
 {
+    if (!this->container_)
+    {
+        return nullptr;
+    }
     // go through all words and return the first one that contains the point.
-    return this->container_.getElementAt(point);
+    return this->container_->getElementAt(point);
 }
 
 std::pair<int, int> MessageLayout::getWordBounds(
@@ -456,7 +479,8 @@ std::pair<int, int> MessageLayout::getWordBounds(
     // elements in the container
     if (hoveredElement->getWordId() != -1)
     {
-        return this->container_.getWordBounds(hoveredElement);
+        // hoveredElement is in the container, so it exists
+        return this->container_->getWordBounds(hoveredElement);
     }
 
     const auto wordStart = this->getSelectionIndex(relativePos) -
@@ -470,23 +494,38 @@ std::pair<int, int> MessageLayout::getWordBounds(
 
 size_t MessageLayout::getLastCharacterIndex() const
 {
-    return this->container_.getLastCharacterIndex();
+    if (!this->container_)
+    {
+        return 0;
+    }
+    return this->container_->getLastCharacterIndex();
 }
 
 size_t MessageLayout::getFirstMessageCharacterIndex() const
 {
-    return this->container_.getFirstMessageCharacterIndex();
+    if (!this->container_)
+    {
+        return 0;
+    }
+    return this->container_->getFirstMessageCharacterIndex();
 }
 
 size_t MessageLayout::getSelectionIndex(QPointF position) const
 {
-    return this->container_.getSelectionIndex(position);
+    if (!this->container_)
+    {
+        return 0;
+    }
+    return this->container_->getSelectionIndex(position);
 }
 
 void MessageLayout::addSelectionText(QString &str, uint32_t from, uint32_t to,
                                      CopyMode copymode)
 {
-    this->container_.addSelectionText(str, from, to, copymode);
+    if (this->container_)
+    {
+        this->container_->addSelectionText(str, from, to, copymode);
+    }
 }
 
 }  // namespace chatterino

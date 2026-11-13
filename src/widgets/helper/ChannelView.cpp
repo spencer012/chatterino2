@@ -35,6 +35,7 @@
 #include "singletons/WindowManager.hpp"
 #include "util/Clipboard.hpp"
 #include "util/DistanceBetweenPoints.hpp"
+#include "util/GradualRelease.hpp"
 #include "util/Helpers.hpp"
 #include "util/IncognitoBrowser.hpp"
 #include "util/QMagicEnum.hpp"
@@ -400,6 +401,16 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
                                     getSettings()->overlayBackgroundOpacity);
     this->messagePreferences_.connectSettings(getSettings(),
                                               this->signalHolder_);
+}
+
+ChannelView::~ChannelView()
+{
+    // Freeing a long history takes a while
+    releaseGradually(this->messages_.takeAll());
+    if (this->channel_ && this->channel_.use_count() == 1)
+    {
+        releaseGradually(this->channel_->takeMessages());
+    }
 }
 
 void ChannelView::initializeLayout()
@@ -921,8 +932,9 @@ void ChannelView::clearMessages()
     this->pauseScrollMaximumOffset_ = 0;
     this->pauseSelectionOffset_ = 0;
     this->invalidateReplayIndex();
-    // Clear all stored messages in this chat widget
-    this->messages_.clear();
+    // Clear all stored messages in this chat widget. Freeing a long history
+    // takes a while, so it's spread over a few event loop turns.
+    releaseGradually(this->messages_.takeAll());
     this->scrollBar_->clearHighlights();
     this->scrollBar_->resetBounds();
     this->scrollBar_->setMaximum(0);
@@ -1113,7 +1125,57 @@ bool ChannelView::showScrollbarHighlights() const
     return this->channel_->getType() != Channel::Type::TwitchMentions;
 }
 
+ChannelView::PreparedMessages ChannelView::prepareMessages(
+    std::vector<MessagePtr> messages, bool ignoreHighlights)
+{
+    PreparedMessages prepared;
+    prepared.layouts.reserve(messages.size());
+    prepared.highlights.reserve(messages.size());
+
+    bool alternateBackground = false;
+    for (const auto &msg : messages)
+    {
+        auto messageLayout = std::make_shared<MessageLayout>(msg);
+
+        if (alternateBackground)
+        {
+            messageLayout->flags.set(MessageLayoutFlag::AlternateBackground);
+        }
+        alternateBackground = !alternateBackground;
+
+        if (ignoreHighlights)
+        {
+            messageLayout->flags.set(MessageLayoutFlag::IgnoreHighlights);
+        }
+
+        prepared.layouts.push_back(std::move(messageLayout));
+        prepared.highlights.push_back(msg->getScrollBarHighlight());
+    }
+    prepared.messages = std::move(messages);
+
+    return prepared;
+}
+
 void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
+{
+    // Copy over messages from the backing channel to the filtered one
+    // and the ui.
+    auto snapshot = underlyingChannel->getMessageSnapshot();
+    if (this->channelFilters_)
+    {
+        std::erase_if(snapshot, [this](const auto &msg) {
+            return !this->shouldIncludeMessage(msg);
+        });
+    }
+
+    this->setChannel(
+        underlyingChannel,
+        prepareMessages(std::move(snapshot),
+                        underlyingChannel->shouldIgnoreHighlights()));
+}
+
+void ChannelView::setChannel(const ChannelPtr &underlyingChannel,
+                             PreparedMessages prepared)
 {
     /// Clear connections from the last channel
     this->channelConnections_.clear();
@@ -1125,6 +1187,13 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
     {
         this->messages_.setLimit(underlyingChannel->messageLimit());
         this->scrollBar_->setMessageLimit(underlyingChannel->messageLimit());
+    }
+
+    // Nothing else uses the previous copy, and freeing a long history takes a
+    // while
+    if (this->channel_ && this->channel_.use_count() == 1)
+    {
+        releaseGradually(this->channel_->takeMessages());
     }
 
     /// make copy of channel and expose
@@ -1210,41 +1279,13 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
             this->clearMessages();
         });
 
-    // Copy over messages from the backing channel to the filtered one
-    // and the ui.
-    auto snapshot = underlyingChannel->getMessageSnapshot();
-
-    size_t nMessagesAdded = 0;
-    for (const auto &msg : snapshot)
+    const auto nMessagesAdded = prepared.layouts.size();
+    this->channel_->resetMessages(std::move(prepared.messages));
+    this->messages_.assign(std::move(prepared.layouts));
+    this->lastMessageHasAlternateBackground_ = nMessagesAdded % 2 == 1;
+    if (this->showScrollbarHighlights())
     {
-        if (!this->shouldIncludeMessage(msg))
-        {
-            continue;
-        }
-
-        auto messageLayout = std::make_shared<MessageLayout>(msg);
-
-        if (this->lastMessageHasAlternateBackground_)
-        {
-            messageLayout->flags.set(MessageLayoutFlag::AlternateBackground);
-        }
-        this->lastMessageHasAlternateBackground_ =
-            !this->lastMessageHasAlternateBackground_;
-
-        if (underlyingChannel->shouldIgnoreHighlights())
-        {
-            messageLayout->flags.set(MessageLayoutFlag::IgnoreHighlights);
-        }
-
-        this->messages_.pushBack(messageLayout);
-
-        this->channel_->addMessage(msg, MessageContext::Repost);
-
-        nMessagesAdded++;
-        if (this->showScrollbarHighlights())
-        {
-            this->scrollBar_->addHighlight(msg->getScrollBarHighlight());
-        }
+        this->scrollBar_->setHighlights(std::move(prepared.highlights));
     }
 
     this->scrollBar_->setMaximum(
@@ -1558,7 +1599,7 @@ void ChannelView::messagesUpdated()
     this->invalidateReplayIndex();
     auto snapshot = this->channel_->getMessageSnapshot();
 
-    this->messages_.clear();
+    releaseGradually(this->messages_.takeAll());
     this->scrollBar_->clearHighlights();
     this->scrollBar_->resetBounds();
     this->scrollBar_->setMaximum(qreal(snapshot.size()));
@@ -1566,27 +1607,13 @@ void ChannelView::messagesUpdated()
     this->lastMessageHasAlternateBackground_ = false;
     this->lastMessageHasAlternateBackgroundReverse_ = true;
 
-    for (const auto &msg : snapshot)
+    auto prepared = prepareMessages(std::move(snapshot),
+                                    this->channel_->shouldIgnoreHighlights());
+    this->lastMessageHasAlternateBackground_ = prepared.layouts.size() % 2 == 1;
+    this->messages_.assign(std::move(prepared.layouts));
+    if (this->showScrollbarHighlights())
     {
-        auto messageLayout = std::make_shared<MessageLayout>(msg);
-
-        if (this->lastMessageHasAlternateBackground_)
-        {
-            messageLayout->flags.set(MessageLayoutFlag::AlternateBackground);
-        }
-        this->lastMessageHasAlternateBackground_ =
-            !this->lastMessageHasAlternateBackground_;
-
-        if (this->channel_->shouldIgnoreHighlights())
-        {
-            messageLayout->flags.set(MessageLayoutFlag::IgnoreHighlights);
-        }
-
-        this->messages_.pushBack(messageLayout);
-        if (this->showScrollbarHighlights())
-        {
-            this->scrollBar_->addHighlight(msg->getScrollBarHighlight());
-        }
+        this->scrollBar_->setHighlights(std::move(prepared.highlights));
     }
 
     this->queueLayout();

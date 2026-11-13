@@ -35,6 +35,7 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/Updates.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/Filters.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/FilterPerformance.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/SearchPerformance.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/McpServer.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/LinkParser.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/InputCompletion.cpp

@@ -6,9 +6,10 @@
 
 namespace chatterino {
 
+// Views keep a highlight for every message, and most have none, so this
+// doesn't allocate a color
 ScrollbarHighlight::ScrollbarHighlight()
-    : color_(std::make_shared<QColor>())
-    , style_(Style::None)
+    : style_(Style::None)
 {
 }
 
@@ -21,7 +22,10 @@ ScrollbarHighlight::ScrollbarHighlight(const std::shared_ptr<QColor> &color,
 
 QColor ScrollbarHighlight::getColor() const
 {
-    assert(this->color_);
+    if (!this->color_)
+    {
+        return {};
+    }
     return *this->color_;
 }
 

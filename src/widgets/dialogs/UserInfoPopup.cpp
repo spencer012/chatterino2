@@ -30,6 +30,7 @@
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutCreator.hpp"
+#include "util/ParallelFilter.hpp"
 #include "util/PostToThread.hpp"
 #include "util/StreamLink.hpp"
 #include "widgets/buttons/LabelButton.hpp"
@@ -93,7 +94,7 @@ Label *addCopyableLabel(LayoutCreator<QHBoxLayout> box, const char *tooltip,
     return label.getElement();
 };
 
-bool checkMessageUserName(const QString &userName, MessagePtr message)
+bool checkMessageUserName(const QString &userName, const MessagePtr &message)
 {
     if (message->flags.has(MessageFlag::Whisper))
     {
@@ -128,12 +129,24 @@ ChannelPtr filterMessages(const QString &userName, ChannelPtr channel)
             std::make_shared<Channel>(channel->getName(), Channel::Type::None);
     }
 
-    for (const auto &message : snapshot)
+    // Busy channels keep hundreds of thousands of messages, so the scan is
+    // split over the thread pool
+    auto matches = parallelFilterRanges<MessagePtr>(
+        snapshot.size(), 4096, [&](size_t begin, size_t end) {
+            std::vector<MessagePtr> found;
+            for (size_t i = begin; i < end; ++i)
+            {
+                if (checkMessageUserName(userName, snapshot[i]))
+                {
+                    found.push_back(snapshot[i]);
+                }
+            }
+            return found;
+        });
+
+    for (const auto &message : matches)
     {
-        if (checkMessageUserName(userName, message))
-        {
-            channelPtr->addMessage(message, MessageContext::Repost);
-        }
+        channelPtr->addMessage(message, MessageContext::Repost);
     }
 
     return channelPtr;

@@ -6,10 +6,13 @@
 
 #include "ForwardDecl.hpp"
 #include "widgets/BasePopup.hpp"
+#include "widgets/helper/ChannelView.hpp"
 
 #include <QTimer>
 
+#include <atomic>
 #include <memory>
+#include <vector>
 
 class QLineEdit;
 
@@ -22,6 +25,7 @@ class SearchPopup : public BasePopup
 {
 public:
     SearchPopup(QWidget *parent, Split *split = nullptr);
+    ~SearchPopup() override;
 
     virtual void addChannel(ChannelView &channel);
     void goToMessage(const MessagePtr &message);
@@ -42,23 +46,27 @@ protected:
 private:
     void initLayout();
     void search();
+    void showResults(std::vector<MessagePtr> messages,
+                     ChannelView::PreparedMessages prepared);
     void addShortcuts() override;
-    std::vector<MessagePtr> buildSnapshot();
+
+    /// The messages to search, shared with the search threads
+    struct Snapshot;
+    std::shared_ptr<Snapshot> buildSnapshot();
 
     /**
-     * @brief Only retains those message from a list of messages that satisfy a
-     *        search query.
+     * @brief Only retains those messages from a list of messages that satisfy
+     *        a search query. The work is split over the global thread pool.
      *
      * @param text          the search query -- will be parsed for MessagePredicates
-     * @param channelName   name of the channel to be returned
      * @param snapshot      list of messages to filter
-     * @param filterSet     channel filter to apply
+     * @param cancelled     stops the search early once set
      *
-     * @return a ChannelPtr with "channelName" and the filtered messages from
-     *         "snapshot"
+     * @return the messages from "snapshot" matching "text", in order
      */
-    static ChannelPtr filter(const QString &text, const QString &channelName,
-                             const std::vector<MessagePtr> &snapshot);
+    static std::vector<MessagePtr> filter(
+        const QString &text, const std::vector<MessagePtr> &snapshot,
+        const std::atomic_bool &cancelled);
 
     /**
      * @brief Checks the input for tags and registers their corresponding
@@ -70,9 +78,11 @@ private:
     static std::vector<std::unique_ptr<MessagePredicate>> parsePredicates(
         const QString &input);
 
-    std::vector<MessagePtr> snapshot_;
+    std::shared_ptr<Snapshot> snapshot_;
     QTimer searchTimer_;
-    bool snapshotBuilt_ = false;
+    /// Set to stop the search that is currently running
+    std::shared_ptr<std::atomic_bool> cancelSearch_;
+    uint64_t searchGeneration_ = 0;
     QLineEdit *searchInput_{};
     ChannelView *channelView_{};
     QString channelName_{};

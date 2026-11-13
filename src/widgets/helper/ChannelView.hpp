@@ -12,6 +12,7 @@
 #include "messages/Selection.hpp"
 #include "util/ThreadGuard.hpp"
 #include "widgets/BaseWidget.hpp"
+#include "widgets/helper/ScrollbarHighlight.hpp"
 #include "widgets/TooltipWidget.hpp"
 
 #include <pajlada/signals/signal.hpp>
@@ -108,6 +109,8 @@ public:
                          Context context = Context::None,
                          size_t messagesLimit = 1000);
 
+    ~ChannelView() override;
+
     void queueUpdate();
     QString cacheDiagnostics(bool includeContentPool = true) const;
     void setMessageLimit(size_t limit);
@@ -172,10 +175,29 @@ public:
     /// @see #channel()
     ChannelPtr underlyingChannel() const;
 
+    /// Layouts and scrollbar highlights for messages, built before they're
+    /// shown so that large histories can be prepared off the GUI thread.
+    struct PreparedMessages {
+        std::vector<MessagePtr> messages;
+        std::vector<MessageLayoutPtr> layouts;
+        std::vector<ScrollbarHighlight> highlights;
+    };
+
+    /// Builds layouts for @a messages. Safe to call from any thread.
+    static PreparedMessages prepareMessages(std::vector<MessagePtr> messages,
+                                            bool ignoreHighlights);
+
     /// @brief Set the channel this view is displaying
     ///
     /// @see #underlyingChannel()
     void setChannel(const ChannelPtr &underlyingChannel);
+
+    /// Like #setChannel(const ChannelPtr &), but shows @a prepared instead
+    /// of filtering and copying the messages of @a underlyingChannel.
+    /// @a prepared must hold the messages this view would include, in
+    /// order, built with the channel's shouldIgnoreHighlights().
+    void setChannel(const ChannelPtr &underlyingChannel,
+                    PreparedMessages prepared);
 
     void setFilters(const QList<QUuid> &ids);
     QList<QUuid> getFilterIds() const;

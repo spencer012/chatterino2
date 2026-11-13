@@ -12,6 +12,9 @@
 #include "singletons/Settings.hpp"
 #include "util/ChannelHelpers.hpp"
 
+#include <algorithm>
+#include <cassert>
+
 namespace {
 
 constexpr uint8_t MAX_RECURSION = 64;
@@ -313,6 +316,26 @@ void Channel::addMessagesAtStart(const std::vector<MessagePtr> &_messages)
     {
         this->messagesAddedAtStart.invoke(addedMessages);
     }
+}
+
+void Channel::resetMessages(std::vector<MessagePtr> messages)
+{
+    // Freezing would touch every message, which is slow for long histories
+    assert(std::ranges::all_of(messages, [](const auto &msg) {
+        return msg->frozen;
+    }));
+
+    this->messages_.replaceAll(std::move(messages));
+
+    this->messageIDIndex_.clear();
+    this->messageIDIndexValid_ = false;
+}
+
+std::vector<MessagePtr> Channel::takeMessages()
+{
+    this->messageIDIndex_.clear();
+    this->messageIDIndexValid_ = false;
+    return this->messages_.takeAll();
 }
 
 void Channel::fillInMissingMessages(const std::vector<MessagePtr> &messages)

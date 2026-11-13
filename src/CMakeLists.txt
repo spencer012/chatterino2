@@ -657,6 +657,8 @@ set(SOURCE_FILES
         util/FunctionEventFilter.hpp
         util/FuzzyConvert.cpp
         util/FuzzyConvert.hpp
+        util/GradualRelease.cpp
+        util/GradualRelease.hpp
         util/Helpers.cpp
         util/Helpers.hpp
         util/ImageUploader.cpp
@@ -673,6 +675,7 @@ set(SOURCE_FILES
         util/LoadPixmap.hpp
         util/OnceFlag.cpp
         util/OnceFlag.hpp
+        util/ParallelFilter.hpp
         util/RapidjsonHelpers.cpp
         util/RapidjsonHelpers.hpp
         util/RapidJsonSerializeQSize.hpp

@@ -21,52 +21,64 @@
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/ChannelHelpers.hpp"
+#include "util/GradualRelease.hpp"
+#include "util/ParallelFilter.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/splits/Split.hpp"
 
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QtConcurrent>
+#include <QThreadPool>
+
+#include <algorithm>
+#include <mutex>
 
 namespace chatterino {
 
-ChannelPtr SearchPopup::filter(const QString &text, const QString &channelName,
-                               const std::vector<MessagePtr> &snapshot)
+struct SearchPopup::Snapshot {
+    std::vector<MessagePtr> messages;
+
+    /// Messages from several channels still have to be deduplicated and
+    /// sorted. The first search does that on its thread.
+    bool needsMerge = false;
+    std::once_flag merged;
+};
+
+std::vector<MessagePtr> SearchPopup::filter(
+    const QString &text, const std::vector<MessagePtr> &snapshot,
+    const std::atomic_bool &cancelled)
 {
-    ChannelPtr channel(new Channel(channelName, Channel::Type::None,
-                                   std::max<size_t>(1, snapshot.size())));
+    return parallelFilterRanges<MessagePtr>(
+        snapshot.size(), 4096, [&](size_t begin, size_t end) {
+            // Predicates keep state (e.g. regexes), so every range parses its
+            // own from "text"
+            auto predicates = parsePredicates(text);
 
-    // Parse predicates from tags in "text"
-    auto predicates = parsePredicates(text);
-
-    // Check for every message whether it fulfills all predicates that have
-    // been registered
-    for (size_t i = 0; i < snapshot.size(); ++i)
-    {
-        MessagePtr message = snapshot[i];
-
-        bool accept = true;
-        for (const auto &pred : predicates)
-        {
-            // Discard the message as soon as one predicate fails
-            if (!pred->appliesTo(*message))
+            std::vector<MessagePtr> matches;
+            for (size_t i = begin; i < end; ++i)
             {
-                accept = false;
-                break;
+                if (i % 1024 == 0 && cancelled.load(std::memory_order_relaxed))
+                {
+                    return std::vector<MessagePtr>{};
+                }
+
+                const auto &message = snapshot[i];
+
+                // Check for every message whether it fulfills all predicates
+                // that have been registered
+                bool accept =
+                    std::ranges::all_of(predicates, [&](const auto &pred) {
+                        return pred->appliesTo(*message);
+                    });
+                if (accept)
+                {
+                    matches.push_back(message);
+                }
             }
-        }
-
-        // If all predicates match, add the message to the channel
-        if (accept)
-        {
-            auto overrideFlags = std::optional<MessageFlags>(message->flags);
-            overrideFlags->set(MessageFlag::DoNotLog);
-
-            channel->addMessage(message, MessageContext::Repost, overrideFlags);
-        }
-    }
-
-    return channel;
+            return matches;
+        });
 }
 
 SearchPopup::SearchPopup(QWidget *parent, Split *split)
@@ -92,6 +104,28 @@ SearchPopup::SearchPopup(QWidget *parent, Split *split)
     this->addShortcuts();
 
     this->themeChangedEvent();
+}
+
+SearchPopup::~SearchPopup()
+{
+    if (this->cancelSearch_)
+    {
+        *this->cancelSearch_ = true;
+    }
+
+    // Freeing long histories takes a while. A search that's still running
+    // keeps the snapshot and frees it once it's done.
+    if (this->snapshot_ && this->snapshot_.use_count() == 1)
+    {
+        releaseGradually(std::move(this->snapshot_->messages));
+    }
+    // Only the results view (which is destroyed right after this) and this
+    // reference know the results
+    if (auto results = this->channelView_->underlyingChannel();
+        results && results.use_count() == 2)
+    {
+        releaseGradually(results->takeMessages());
+    }
 }
 
 void SearchPopup::addShortcuts()
@@ -234,35 +268,118 @@ void SearchPopup::themeChangedEvent()
 void SearchPopup::search()
 {
     this->searchTimer_.stop();
-    if (!this->snapshotBuilt_)
+    if (!this->snapshot_)
     {
         this->snapshot_ = this->buildSnapshot();
-        this->snapshotBuilt_ = true;
     }
 
-    this->channelView_->setChannel(filter(this->searchInput_->text(),
-                                          this->channelName_, this->snapshot_));
+    // Searching hundreds of thousands of messages takes a while, so it runs on
+    // the thread pool and the results are shown once they're ready
+    if (this->cancelSearch_)
+    {
+        *this->cancelSearch_ = true;
+    }
+    auto cancelled = std::make_shared<std::atomic_bool>(false);
+    this->cancelSearch_ = cancelled;
+    auto generation = ++this->searchGeneration_;
+
+    struct Results {
+        /// For the channel the results are shown from
+        std::vector<MessagePtr> messages;
+        ChannelView::PreparedMessages prepared;
+    };
+
+    QtConcurrent::run([snapshot = this->snapshot_,
+                       text = this->searchInput_->text(), cancelled] {
+        std::call_once(snapshot->merged, [&] {
+            if (!snapshot->needsMerge)
+            {
+                return;
+            }
+            // remove any duplicate messages from splits containing the same
+            // channel
+            deduplicateMessages(snapshot->messages);
+
+            // resort by time for presentation
+            std::ranges::sort(snapshot->messages,
+                              [](const MessagePtr &a, const MessagePtr &b) {
+                                  return a->timestamp < b->timestamp;
+                              });
+        });
+
+        auto matches = filter(text, snapshot->messages, *cancelled);
+        if (*cancelled)
+        {
+            return std::shared_ptr<Results>{};
+        }
+
+        // Results are shown in a channel of type None, which doesn't ignore
+        // highlights. Both channels get their copy here, since copying
+        // hundreds of thousands of messages takes a while.
+        auto prepared = ChannelView::prepareMessages(matches, false);
+        return std::make_shared<Results>(std::move(matches),
+                                         std::move(prepared));
+    }).then(this, [this, generation](std::shared_ptr<Results> results) {
+        if (!results)
+        {
+            return;
+        }
+
+        // Skip results that a newer search (or one about to start) replaces
+        if (generation != this->searchGeneration_ ||
+            this->searchTimer_.isActive())
+        {
+            // The layouts were never shown, so they can be freed off the GUI
+            // thread
+            QThreadPool::globalInstance()->start(
+                [results = std::move(results)] {});
+            return;
+        }
+
+        this->showResults(std::move(results->messages),
+                          std::move(results->prepared));
+    });
 }
 
-std::vector<MessagePtr> SearchPopup::buildSnapshot()
+void SearchPopup::showResults(std::vector<MessagePtr> messages,
+                              ChannelView::PreparedMessages prepared)
 {
+    ChannelPtr channel(new Channel(this->channelName_, Channel::Type::None,
+                                   std::max<size_t>(1, messages.size())));
+    channel->resetMessages(std::move(messages));
+
+    auto previous = this->channelView_->underlyingChannel();
+    this->channelView_->setChannel(channel, std::move(prepared));
+
+    // Only this popup knew the previous results, and freeing a long history
+    // takes a while
+    if (previous && previous.use_count() == 1)
+    {
+        releaseGradually(previous->takeMessages());
+    }
+}
+
+std::shared_ptr<SearchPopup::Snapshot> SearchPopup::buildSnapshot()
+{
+    auto snapshot = std::make_shared<Snapshot>();
+
     // no point in filtering/sorting if it's a single channel search
     if (this->searchChannels_.length() == 1)
     {
         const auto channelPtr = this->searchChannels_.at(0);
-        return channelPtr.get().channel()->getMessageSnapshot();
+        snapshot->messages = channelPtr.get().channel()->getMessageSnapshot();
+        return snapshot;
     }
 
-    auto combinedSnapshot = std::vector<std::shared_ptr<const Message>>{};
     for (auto &channel : this->searchChannels_)
     {
         ChannelView &sharedView = channel.get();
 
         const FilterSetPtr filterSet = sharedView.getFilterSet();
-        std::vector<MessagePtr> snapshot =
+        std::vector<MessagePtr> messages =
             sharedView.channel()->getMessageSnapshot();
 
-        for (const auto &message : snapshot)
+        for (auto &message : messages)
         {
             if (filterSet &&
                 !filterSet->filter(message, sharedView.underlyingChannel()))
@@ -270,20 +387,12 @@ std::vector<MessagePtr> SearchPopup::buildSnapshot()
                 continue;
             }
 
-            combinedSnapshot.push_back(message);
+            snapshot->messages.push_back(std::move(message));
         }
     }
+    snapshot->needsMerge = true;
 
-    // remove any duplicate messages from splits containing the same channel
-    deduplicateMessages(combinedSnapshot);
-
-    // resort by time for presentation
-    std::sort(combinedSnapshot.begin(), combinedSnapshot.end(),
-              [](MessagePtr &a, MessagePtr &b) {
-                  return a->timestamp < b->timestamp;
-              });
-
-    return combinedSnapshot;
+    return snapshot;
 }
 
 void SearchPopup::initLayout()
@@ -342,9 +451,10 @@ std::vector<std::unique_ptr<MessagePredicate>> SearchPopup::parsePredicates(
     // strings.
     // It also ignores whitespaces in values when being surrounded by quotation
     // marks, to enable inputs like this => regex:"kappa 123"
-    static QRegularExpression predicateRegex(
+    // Searches parse their query on several threads at once
+    static thread_local QRegularExpression predicateRegex(
         R"lit((?<negation>[!\-])?(?:(?<name>\w+):(?<value>".+?"|[^\s]+))|[^\s]+?(?=$|\s))lit");
-    static QRegularExpression trimQuotationMarksRegex(R"(^"|"$)");
+    static thread_local QRegularExpression trimQuotationMarksRegex(R"(^"|"$)");
 
     QRegularExpressionMatchIterator it = predicateRegex.globalMatch(input);
 

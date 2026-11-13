@@ -9,6 +9,7 @@
 #include <boost/circular_buffer.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <optional>
 #include <vector>
 
@@ -46,6 +47,26 @@ public:
     {
         this->guard_.guard();
         this->items_.clear();
+    }
+
+    /// Removes all items and returns them, oldest first.
+    std::vector<T> takeAll()
+    {
+        this->guard_.guard();
+        std::vector<T> items(std::make_move_iterator(this->items_.begin()),
+                             std::make_move_iterator(this->items_.end()));
+        this->items_.clear();
+        return items;
+    }
+
+    /// Replaces all items with the newest ones of @a items that fit.
+    void assign(std::vector<T> &&items)
+    {
+        this->guard_.guard();
+        const auto count = std::min(items.size(), this->items_.capacity());
+        this->items_.assign(this->items_.capacity(),
+                            std::make_move_iterator(items.end() - count),
+                            std::make_move_iterator(items.end()));
     }
 
     bool pushBack(const T &item)

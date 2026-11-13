@@ -104,6 +104,13 @@ public:
         MessagePtr message, MessageContext context,
         std::optional<MessageFlags> overridingFlags = std::nullopt) final;
     void addMessagesAtStart(const std::vector<MessagePtr> &messages_);
+    /// Replaces all messages with the newest ones of @a messages without
+    /// invoking any signals. Only use this on channels nothing shows yet.
+    /// @a messages must already be frozen, like the messages of any channel.
+    void resetMessages(std::vector<MessagePtr> messages);
+    /// Removes all messages without invoking any signals and returns them.
+    /// Only use this on channels nothing shows anymore.
+    std::vector<MessagePtr> takeMessages();
 
     void addSystemMessage(const QString &contents);
     void addSystemMessage(const QString &contents, const QString &timeoutUser);

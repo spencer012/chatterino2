@@ -15,6 +15,7 @@
 #include <QTimer>
 
 #include <cmath>
+#include <iterator>
 
 namespace {
 
@@ -120,6 +121,16 @@ void Scrollbar::replaceHighlight(size_t index, ScrollbarHighlight replacement)
         this->highlightMarkers_.insert_or_assign(key, this->highlights_[index]);
     }
     this->highlightLayerDirty_ = true;
+}
+
+void Scrollbar::setHighlights(std::vector<ScrollbarHighlight> &&highlights)
+{
+    const auto count =
+        std::min(highlights.size(), this->highlights_.capacity());
+    this->highlights_.assign(this->highlights_.capacity(),
+                             std::make_move_iterator(highlights.end() - count),
+                             std::make_move_iterator(highlights.end()));
+    this->rebuildHighlightMarkers();
 }
 
 void Scrollbar::clearHighlights()

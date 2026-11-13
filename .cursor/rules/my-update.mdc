@@ -55,6 +55,16 @@ benchmarks instead. Use a GitHub noreply author address for new commits.
   posted events: no repaints and no input until a window was dragged. Upstream
   #7409 made the same fix, so the fork now uses upstream's `Button` code. Don't
   reintroduce an always-running timer.
+- Search popup and usercard stay responsive with ~500k-message histories.
+  `SearchPopup` filters and builds layouts on `QtConcurrent` (cancel flag plus
+  generation check, `util/ParallelFilter.hpp` splits the range across the pool)
+  and `ChannelView::prepareMessages` builds layouts off the GUI thread. Result
+  channels are filled by moving vectors (`Channel::resetMessages` expects
+  already-frozen messages). Dropped histories are freed in batches per event
+  loop turn by `util/GradualRelease` (flushed on `aboutToQuit`). The remaining
+  cost is `MessagePtr` copies/releases, so keep per-message loops off the GUI
+  thread or batched. Disabled timings: `chatterino-test
+  --gtest_also_run_disabled_tests --gtest_filter=*SearchPerformance*`.
 - Details and probes are documented in `docs/message-cache-controls.md` and
   `docs/message-cache-performance.md`; tests cover images, layouts and channels.
 

@@ -125,7 +125,9 @@ private:
 
     // variables
     const MessagePtr message_;
-    MessageLayoutContainer container_;
+    /// Created by the first layout. Views keep a layout for every message in
+    /// their history, so the ones that are never shown should stay small.
+    std::unique_ptr<MessageLayoutContainer> container_;
     std::unique_ptr<QPixmap> buffer_;
     bool bufferValid_ = false;
 
