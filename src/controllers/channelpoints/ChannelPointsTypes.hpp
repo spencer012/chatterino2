@@ -20,6 +20,8 @@ struct PointsReward {
     QString backgroundColor;
     QString pricingType = QStringLiteral("POINTS");
     int cost = 0;
+    /// Only set for rewards bought with Bits instead of channel points.
+    int bitsCost = 0;
 
     /// Invalid if the reward has no active cooldown.
     QDateTime cooldownExpiresAt;
@@ -41,6 +43,14 @@ struct PointsReward {
     bool isUserInputRequired = false;
     bool isSubOnly = false;
 };
+
+/// Whether `reward` is bought with channel points.
+///
+/// Channels can also offer custom rewards that cost Bits (e.g. premium TTS).
+/// Twitch lists those as custom rewards with `pricingType: BITS`, a points
+/// `cost` of 0 and a separate `bitsCost`, but its channel points menu leaves
+/// them out and they can't be redeemed with points.
+bool isPointsReward(const PointsReward &reward);
 
 /// Why a reward can't be redeemed right now. `None` means it's redeemable.
 enum class RewardBlock {

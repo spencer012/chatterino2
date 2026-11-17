@@ -6,6 +6,15 @@
 
 namespace chatterino {
 
+bool isPointsReward(const PointsReward &reward)
+{
+    // Live updates may leave out the pricing fields, so also reject a points
+    // cost of 0, which Twitch doesn't allow for points rewards.
+    return reward.pricingType.compare(QStringLiteral("POINTS"),
+                                      Qt::CaseInsensitive) == 0 &&
+           reward.bitsCost <= 0 && reward.cost > 0;
+}
+
 RewardBlock evaluateReward(const PointsReward &reward,
                            std::optional<int> balance, const QDateTime &now)
 {

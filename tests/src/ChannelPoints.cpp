@@ -81,6 +81,25 @@ const char *CONTEXT_RESPONSE = R"({
               "maxPerUserPerStreamSetting": {"isEnabled": false, "maxPerUserPerStream": 0},
               "globalCooldownSetting": {"isEnabled": true, "globalCooldownSeconds": 300}
             },
+            {
+              "id": "reward-bits-tts",
+              "title": "Premium Dandy TTS",
+              "prompt": "",
+              "backgroundColor": "#9147FF",
+              "cost": 0,
+              "bitsCost": 1000,
+              "pricingType": "BITS",
+              "cooldownExpiresAt": null,
+              "isEnabled": true,
+              "isInStock": true,
+              "isPaused": false,
+              "isSubOnly": false,
+              "isUserInputRequired": true,
+              "redemptionsRedeemedCurrentStream": null,
+              "maxPerStreamSetting": {"isEnabled": false, "maxPerStream": 0},
+              "maxPerUserPerStreamSetting": {"isEnabled": false, "maxPerUserPerStream": 0},
+              "globalCooldownSetting": {"isEnabled": false, "globalCooldownSeconds": 0}
+            },
             {"title": "missing id is skipped", "cost": 1}
           ]
         }
@@ -154,6 +173,7 @@ TEST(ChannelPoints, ParseContext)
     EXPECT_EQ(context->displayName, "pajlada");
     ASSERT_TRUE(context->balance);
     EXPECT_EQ(*context->balance, 12345);
+    // The Bits reward and the reward without an ID are skipped.
     ASSERT_EQ(context->rewards.size(), 2);
 
     const auto &hi = context->rewards[0];
@@ -183,6 +203,35 @@ TEST(ChannelPoints, ParseContext)
     EXPECT_EQ(tts.userRedemptionsThisStream, 0);
     EXPECT_FALSE(tts.isInStock);
     EXPECT_TRUE(tts.isUserInputRequired);
+}
+
+TEST(ChannelPoints, IsPointsReward)
+{
+    EXPECT_TRUE(isPointsReward(makeReward()));
+
+    // What Twitch sends for a Bits reward such as a premium TTS.
+    auto bits = makeReward();
+    bits.pricingType = "BITS";
+    bits.cost = 0;
+    bits.bitsCost = 1000;
+    EXPECT_FALSE(isPointsReward(bits));
+
+    auto bitsCostOnly = makeReward();
+    bitsCostOnly.bitsCost = 300;
+    EXPECT_FALSE(isPointsReward(bitsCostOnly));
+
+    auto bitsPricingOnly = makeReward();
+    bitsPricingOnly.pricingType = "BITS";
+    EXPECT_FALSE(isPointsReward(bitsPricingOnly));
+
+    // A live update without pricing fields for a Bits reward.
+    auto zeroCost = makeReward();
+    zeroCost.cost = 0;
+    EXPECT_FALSE(isPointsReward(zeroCost));
+
+    auto lowercase = makeReward();
+    lowercase.pricingType = "points";
+    EXPECT_TRUE(isPointsReward(lowercase));
 }
 
 TEST(ChannelPoints, ParseContextErrors)
@@ -436,6 +485,16 @@ TEST(ChannelPoints, ParsePointsEvents)
         R"({"type": "custom-reward-created", "data": {"new_reward": {"id": "n", "channel_id": "5"}}})"));
     EXPECT_EQ(created.type, PointsEvent::Type::RewardCreated);
     EXPECT_EQ(created.reward.id, "n");
+
+    auto bitsCreated = parsePointsEvent(parseJson(R"({
+      "type": "custom-reward-created",
+      "data": {"new_reward": {"id": "b", "channel_id": "5", "cost": 0,
+                              "bits_cost": 2500, "pricing_type": "BITS"}}
+    })"));
+    EXPECT_EQ(bitsCreated.reward.bitsCost, 2500);
+    EXPECT_EQ(bitsCreated.reward.pricingType, "BITS");
+    EXPECT_FALSE(isPointsReward(bitsCreated.reward));
+    EXPECT_TRUE(isPointsReward(updated.reward));
 
     auto deleted = parsePointsEvent(parseJson(
         R"({"type": "custom-reward-deleted", "data": {"deleted_reward": {"id": "d", "channel_id": "5"}}})"));

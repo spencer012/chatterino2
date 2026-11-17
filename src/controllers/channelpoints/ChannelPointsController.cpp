@@ -468,6 +468,21 @@ void ChannelPointsController::handleHermesNotification(
         return;
     }
 
+    const auto removeReward = [&](const QString &reason) {
+        auto it = channel->rewards.find(event.reward.id);
+        if (it == channel->rewards.end())
+        {
+            return;
+        }
+        if (it->queueMode != ChannelPointQueueMode::None)
+        {
+            logWarning(QStringLiteral("Queue dropped: #%1 \"%2\" %3")
+                           .arg(channel->login, it->reward.title, reason));
+        }
+        channel->rewards.erase(it);
+        channel->order.removeAll(event.reward.id);
+    };
+
     switch (event.type)
     {
         case PointsEvent::Type::BalanceUpdate:
@@ -478,6 +493,13 @@ void ChannelPointsController::handleHermesNotification(
         case PointsEvent::Type::RewardUpdated: {
             if (!channel->loaded || event.reward.id.isEmpty())
             {
+                break;
+            }
+            if (!isPointsReward(event.reward))
+            {
+                // e.g. a Bits reward, which can't be redeemed with points.
+                removeReward(QStringLiteral("is no longer a channel points "
+                                            "reward"));
                 break;
             }
             auto it = channel->rewards.find(event.reward.id);
@@ -503,21 +525,9 @@ void ChannelPointsController::handleHermesNotification(
         }
         break;
 
-        case PointsEvent::Type::RewardDeleted: {
-            auto it = channel->rewards.find(event.reward.id);
-            if (it != channel->rewards.end())
-            {
-                if (it->queueMode != ChannelPointQueueMode::None)
-                {
-                    logWarning(QStringLiteral("Queue dropped: #%1 \"%2\" was "
-                                              "deleted by the channel")
-                                   .arg(channel->login, it->reward.title));
-                }
-                channel->rewards.erase(it);
-                channel->order.removeAll(event.reward.id);
-            }
-        }
-        break;
+        case PointsEvent::Type::RewardDeleted:
+            removeReward(QStringLiteral("was deleted by the channel"));
+            break;
 
         case PointsEvent::Type::RewardRedeemed: {
             auto it = channel->rewards.find(event.reward.id);

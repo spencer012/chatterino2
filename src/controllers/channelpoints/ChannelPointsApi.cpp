@@ -43,6 +43,7 @@ query ChannelPointsContext($channelLogin: String!) {
           backgroundColor
           cooldownExpiresAt
           cost
+          bitsCost
           pricingType
           isEnabled
           isInStock
@@ -289,6 +290,7 @@ PointsReward parseGqlReward(const QJsonObject &obj)
     reward.backgroundColor = obj.value("backgroundColor").toString();
     reward.pricingType = obj.value("pricingType").toString("POINTS");
     reward.cost = readInt(obj, "cost");
+    reward.bitsCost = readInt(obj, "bitsCost");
     reward.cooldownExpiresAt =
         parseTwitchTime(obj.value("cooldownExpiresAt").toString());
 
@@ -321,6 +323,7 @@ PointsReward parsePubSubReward(const QJsonObject &obj)
     reward.backgroundColor = obj.value("background_color").toString();
     reward.pricingType = obj.value("pricing_type").toString("POINTS");
     reward.cost = readInt(obj, "cost");
+    reward.bitsCost = readInt(obj, "bits_cost");
     reward.cooldownExpiresAt =
         parseTwitchTime(obj.value("cooldown_expires_at").toString());
 
@@ -418,7 +421,8 @@ std::optional<ChannelContext> parseContext(const QJsonObject &root,
     for (const auto &value : settings.value("customRewards").toArray())
     {
         auto reward = parseGqlReward(value.toObject());
-        if (reward.id.isEmpty())
+        // Bits rewards aren't in Twitch's channel points menu either.
+        if (reward.id.isEmpty() || !isPointsReward(reward))
         {
             continue;
         }
