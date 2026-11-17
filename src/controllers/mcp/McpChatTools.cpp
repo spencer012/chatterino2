@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <map>
+#include <tuple>
 
 namespace chatterino::mcp {
 
@@ -217,6 +218,62 @@ QJsonObject messageToJson(const Message &message)
     return o;
 }
 
+QString messageToLine(const Message &message)
+{
+    QString line = message.timestamp.isValid()
+                       ? message.timestamp.toLocalTime().toString(Qt::ISODate)
+                       : u"-"_s;
+    line += u" #"_s + message.channelName + u' ' + message.loginName;
+    if (!message.displayName.isEmpty() &&
+        message.displayName.compare(message.loginName, Qt::CaseInsensitive) !=
+            0)
+    {
+        line += u" ("_s + message.displayName + u')';
+    }
+    QStringList flags;
+    for (const auto &[flag, name] : flagNames())
+    {
+        if (message.flags.has(flag))
+        {
+            flags.append(name);
+        }
+    }
+    if (message.reward)
+    {
+        flags.append(u"reward:"_s + message.reward->title);
+    }
+    if (!flags.isEmpty())
+    {
+        line += u" ["_s + flags.join(u',') + u']';
+    }
+    line += u": "_s + message.messageText;
+    return line;
+}
+
+QJsonObject messageFormatSchema()
+{
+    return schema::stringEnum(
+        "\"json\" (default): one object per message with id, badges and "
+        "highlight color. \"lines\": one string per message, \"<time> "
+        "#<channel> <login> [flags]: <text>\", about a fifth of the size.",
+        {u"json"_s, u"lines"_s});
+}
+
+bool wantsLines(const QJsonObject &args)
+{
+    return args::string(args, "format").compare(u"lines"_s,
+                                                Qt::CaseInsensitive) == 0;
+}
+
+QJsonValue formatMessage(const Message &message, bool lines)
+{
+    if (lines)
+    {
+        return messageToLine(message);
+    }
+    return messageToJson(message);
+}
+
 std::vector<Tool> makeChatTools()
 {
     std::vector<Tool> tools;
@@ -284,7 +341,15 @@ std::vector<Tool> makeChatTools()
                              "max 2000.")},
             {"before_id",
              schema::string("Only messages older than the message with this "
-                            "id, for paging back")},
+                            "id, for paging back (use \"oldestId\" from the "
+                            "previous result)")},
+            {"format", messageFormatSchema()},
+            {"distinct",
+             schema::boolean(
+                 "Collapse messages with the same channel, user and text into "
+                 "one entry with \"count\" (lines start with \"xN \"). "
+                 "\"limit\" then counts distinct entries. Good for spotting "
+                 "bot templates and spam bursts. Default false.")},
         }),
         .run =
             [](const QJsonObject &a, const ToolDone &done) {
@@ -376,20 +441,89 @@ std::vector<Tool> makeChatTools()
                         });
                 }
 
+                auto lines = wantsLines(a);
                 auto total = static_cast<qsizetype>(matched.size());
+
+                if (args::boolean(a, "distinct", false))
+                {
+                    // Grouped in order of first appearance
+                    struct Group {
+                        MessagePtr first;
+                        MessagePtr last;
+                        int count = 0;
+                    };
+                    std::vector<Group> groups;
+                    std::map<std::tuple<QString, QString, QString>, size_t>
+                        index;
+                    for (const auto &m : matched)
+                    {
+                        auto key = std::make_tuple(m->channelName,
+                                                   m->loginName.toLower(),
+                                                   m->messageText);
+                        auto [it, inserted] = index.try_emplace(
+                            std::move(key), groups.size());
+                        if (inserted)
+                        {
+                            groups.push_back({.first = m, .last = m});
+                        }
+                        auto &group = groups[it->second];
+                        group.last = m;
+                        ++group.count;
+                    }
+                    auto groupCount = static_cast<qsizetype>(groups.size());
+                    auto first = std::max<qsizetype>(0, groupCount - limit);
+                    QJsonArray out;
+                    for (auto i = first; i < groupCount; ++i)
+                    {
+                        const auto &group = groups[i];
+                        if (lines)
+                        {
+                            auto line = messageToLine(*group.first);
+                            out.append(group.count > 1
+                                           ? u"x%1 "_s.arg(group.count) + line
+                                           : line);
+                            continue;
+                        }
+                        auto o = messageToJson(*group.last);
+                        o.insert("count", group.count);
+                        if (group.count > 1)
+                        {
+                            o.insert("firstTime",
+                                     group.first->timestamp.toLocalTime()
+                                         .toString(Qt::ISODate));
+                        }
+                        out.append(o);
+                    }
+                    done(ToolResult::ok(QJsonObject{
+                        {"scanned", scanned},
+                        {"matched", total},
+                        {"distinct", groupCount},
+                        {"returned", out.size()},
+                        {"truncated", first > 0},
+                        {"messages", out},
+                    }));
+                    return;
+                }
+
                 auto first = std::max<qsizetype>(0, total - limit);
                 QJsonArray out;
                 for (auto i = first; i < total; ++i)
                 {
-                    out.append(messageToJson(*matched[i]));
+                    out.append(formatMessage(*matched[i], lines));
                 }
-                done(ToolResult::ok(QJsonObject{
+                QJsonObject result{
                     {"scanned", scanned},
                     {"matched", total},
                     {"returned", out.size()},
                     {"truncated", first > 0},
                     {"messages", out},
-                }));
+                };
+                if (first < total)
+                {
+                    // For paging back with before_id, which "lines" omits
+                    result.insert("oldestId", matched[first]->id);
+                }
+                done(ToolResult::ok(result));
             },
     });
 
@@ -415,6 +549,7 @@ std::vector<Tool> makeChatTools()
                                  "include. Default 20, max 200.")},
                 {"remote", schema::boolean("Fetch Twitch info. Default "
                                            "true.")},
+                {"format", messageFormatSchema()},
             },
             {"user"}),
         .run =
@@ -433,6 +568,7 @@ std::vector<Tool> makeChatTools()
                 auto recentLimit =
                     std::clamp(args::integer(a, "recent_messages", 20), 0, 200);
                 auto remote = args::boolean(a, "remote", true);
+                auto lines = wantsLines(a);
 
                 QString login = user.toLower();
                 QString userId;
@@ -487,7 +623,7 @@ std::vector<Tool> makeChatTools()
                 for (auto i = firstRecent;
                      i < static_cast<qsizetype>(messages.size()); ++i)
                 {
-                    recent.append(messageToJson(*messages[i]));
+                    recent.append(formatMessage(*messages[i], lines));
                 }
 
                 auto currentUser = getApp()->getAccounts()->twitch.getCurrent();

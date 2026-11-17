@@ -7,6 +7,7 @@
 #include "controllers/highlights/types/AnyHighlight.hpp"
 #include "controllers/ignores/IgnorePhrase.hpp"
 
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
@@ -30,5 +31,15 @@ std::variant<highlights::AnyHighlight, QString> parseHighlight(
 
 /// Reads and validates an ignore phrase the same way add_config_items does
 std::variant<IgnorePhrase, QString> parseIgnorePhrase(const QJsonObject &value);
+
+/// The id list_config shows for an ignore phrase (a hash of its content)
+QString ignorePhraseId(const IgnorePhrase &phrase);
+
+/// Records that the highlights or ignore phrases just changed. Messages that
+/// arrived before then were highlighted with older settings.
+void noteHighlightSettingsChanged();
+
+/// When noteHighlightSettingsChanged() was last called, invalid if never
+QDateTime lastHighlightSettingsChange();
 
 }  // namespace chatterino::mcp

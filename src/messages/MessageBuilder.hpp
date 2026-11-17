@@ -340,9 +340,12 @@ private:
     void appendBttvBadges(const QString &userID);
     void appendSeventvBadges(const QString &userID);
 
+    /// `senderLogin` is only used to count what ignore phrases hide; leave it
+    /// empty when the text isn't a message that would be shown
     [[nodiscard]] static bool isIgnored(const QString &originalMessage,
                                         const QString &userID,
-                                        const Channel *channel);
+                                        const Channel *channel,
+                                        const QString &senderLogin = {});
 
     std::shared_ptr<Message> message_;
     MessageColor textColor_ = MessageColor::Text;

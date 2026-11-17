@@ -33,6 +33,19 @@ bool isUserMessage(const Message &message);
 
 QJsonObject messageToJson(const Message &message);
 
+/// One line per message, much smaller than messageToJson:
+/// "2026-11-17T12:56:08 #channel login [flag,flag]: text"
+QString messageToLine(const Message &message);
+
+/// Schema for the "format" argument of tools that return messages
+QJsonObject messageFormatSchema();
+
+/// Whether the "format" argument asks for one line per message
+bool wantsLines(const QJsonObject &args);
+
+/// messageToLine or messageToJson, depending on `lines`
+QJsonValue formatMessage(const Message &message, bool lines);
+
 }  // namespace mcp
 
 }  // namespace chatterino

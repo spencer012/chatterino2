@@ -1216,13 +1216,16 @@ void MessageBuilder::addLink(const linkparser::Parsed &parsedLink,
 }
 
 bool MessageBuilder::isIgnored(const QString &originalMessage,
-                               const QString &userID, const Channel *channel)
+                               const QString &userID, const Channel *channel,
+                               const QString &senderLogin)
 {
     return isIgnoredMessage({
         .message = originalMessage,
         .twitchUserID = userID,
         .isMod = channel->isMod(),
         .isBroadcaster = channel->isBroadcaster(),
+        .statsChannel = senderLogin.isEmpty() ? QString() : channel->getName(),
+        .statsSender = senderLogin,
     });
 }
 
@@ -1860,7 +1863,7 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
     if (args.allowIgnore)
     {
         bool ignored = MessageBuilder::isIgnored(
-            content, tags.getOrEmpty("user-id"), channel);
+            content, tags.getOrEmpty("user-id"), channel, ircMessage->nick());
         if (ignored)
         {
             return {};

@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <QDateTime>
 #include <QString>
 
+#include <map>
 #include <vector>
 
 namespace chatterino {
@@ -22,7 +24,31 @@ struct IgnoredMessageParameters {
     QString twitchUserLogin;
     bool isMod;
     bool isBroadcaster;
+
+    /// When set, a message hidden by an ignore phrase is counted in
+    /// ignoreBlockStats() under this channel and sender
+    QString statsChannel = {};
+    QString statsSender = {};
 };
+
+/// What one blocking ignore phrase has hidden since Chatterino started
+struct IgnoreBlockStats {
+    qint64 count = 0;
+    QDateTime last;
+    QString lastChannel;
+    QString lastSender;
+    QString lastText;
+    /// Hidden messages per channel and per sender (each capped, the rest is
+    /// counted under an empty key)
+    std::map<QString, qint64> channels;
+    std::map<QString, qint64> senders;
+};
+
+/// Blocking statistics by ignore phrase pattern. Only chat messages are
+/// counted. Used by the MCP server so an agent can tell whose messages an
+/// ignore phrase hides, which it can't see otherwise because hidden
+/// messages are never stored.
+std::map<QString, IgnoreBlockStats> ignoreBlockStats();
 
 struct IgnoredHighlightsResult {
     bool suppressMentions = false;

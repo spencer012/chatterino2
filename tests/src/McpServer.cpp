@@ -5,6 +5,7 @@
 #include "controllers/mcp/McpServer.hpp"
 
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/commands/CommandController.hpp"
 #include "controllers/highlights/HighlightController.hpp"
 #include "mocks/BaseApplication.hpp"
 #include "mocks/UserData.hpp"
@@ -31,7 +32,13 @@ public:
     MockApplication()
         : mock::BaseApplication(R"({})", false, true)
         , highlights(this->settings, &this->accounts)
+        , commands(this->paths_)
     {
+    }
+
+    CommandController *getCommands() override
+    {
+        return &this->commands;
     }
 
     AccountController *getAccounts() override
@@ -52,6 +59,8 @@ public:
     AccountController accounts;
     HighlightController highlights;
     mock::UserDataController userData;
+    // Config changes back up every section, including commands
+    CommandController commands;
 };
 
 class McpServerTest : public ::testing::Test
@@ -105,6 +114,15 @@ protected:
             return {{"error", text}};
         }
         return QJsonDocument::fromJson(text.toUtf8()).object();
+    }
+
+    /// Config changes save the settings shortly after; let that happen
+    /// while this test's application still exists
+    static void waitForSave()
+    {
+        QEventLoop loop;
+        QTimer::singleShot(700, &loop, &QEventLoop::quit);
+        loop.exec();
     }
 
     std::unique_ptr<MockApplication> app;
@@ -455,4 +473,78 @@ TEST_F(McpServerTest, Http)
                      .isEmpty());
 
     this->app->settings.mcpServerEnabled = false;
+}
+
+TEST_F(McpServerTest, UnknownFieldsAreRejected)
+{
+    // User highlights store "username"; "pattern" used to be dropped silently
+    auto wrong = this->callTool(
+        "add_config_items",
+        {{"section", "highlights"},
+         {"items", QJsonArray{QJsonObject{{"type", "user"},
+                                          {"pattern", "someone"}}}}});
+    EXPECT_TRUE(wrong.value("error").toString().contains(R"("pattern")"))
+        << wrong.value("error").toString().toStdString();
+
+    auto right = this->callTool(
+        "add_config_items",
+        {{"section", "highlights"},
+         {"items", QJsonArray{QJsonObject{{"type", "user"},
+                                          {"username", "someone"}}}}});
+    EXPECT_FALSE(right.contains("error"))
+        << right.value("error").toString().toStdString();
+
+    auto found = this->callTool("list_config", {{"section", "highlights"},
+                                                {"contains", "SOMEONE"}});
+    EXPECT_EQ(found.value("matched").toInt(), 1);
+    EXPECT_GT(found.value("count").toInt(), 1);
+    waitForSave();
+}
+
+TEST_F(McpServerTest, IgnoresHaveIdsAndCanBeRemovedById)
+{
+    auto added = this->callTool(
+        "add_config_items",
+        {{"section", "ignores"},
+         {"items", QJsonArray{QJsonObject{{"pattern", "first"},
+                                          {"isBlock", true}},
+                              QJsonObject{{"pattern", "second"},
+                                          {"isBlock", true}}}}});
+    ASSERT_FALSE(added.contains("error"))
+        << added.value("error").toString().toStdString();
+
+    auto listed = this->callTool("list_config", {{"section", "ignores"},
+                                                 {"contains", "second"}});
+    auto items = listed.value("items").toArray();
+    ASSERT_EQ(items.size(), 1);
+    auto item = items.at(0).toObject();
+    EXPECT_EQ(item.value("index").toInt(), 1);
+    auto id = item.value("id").toString();
+    ASSERT_FALSE(id.isEmpty());
+    EXPECT_EQ(item.value("blocked").toObject().value("count").toInt(), 0);
+
+    // The id works in proposals too
+    auto proposal = this->callTool(
+        "check_message", {{"user", "a"},
+                          {"text", "the second one"},
+                          {"remove_ignore_ids", QJsonArray{id}}});
+    EXPECT_TRUE(
+        proposal.value("current").toObject().value("blocked").toBool());
+    EXPECT_FALSE(
+        proposal.value("proposed").toObject().value("blocked").toBool());
+
+    auto badId = this->callTool("check_message",
+                                {{"user", "a"},
+                                 {"text", "b"},
+                                 {"remove_ignore_ids", QJsonArray{"nope"}}});
+    EXPECT_TRUE(badId.contains("error"));
+
+    auto removed = this->callTool(
+        "remove_config_items", {{"section", "ignores"}, {"ids", QJsonArray{id}}});
+    ASSERT_FALSE(removed.contains("error"))
+        << removed.value("error").toString().toStdString();
+    const auto &left = this->app->settings.ignoredMessages.raw();
+    ASSERT_EQ(left.size(), 1);
+    EXPECT_EQ(left[0].getPattern(), "first");
+    waitForSave();
 }

@@ -6,6 +6,7 @@
 
 #include "common/QLogging.hpp"
 #include "common/Version.hpp"
+#include "controllers/mcp/McpConfig.hpp"
 #include "singletons/Settings.hpp"
 
 #include <QHostAddress>
@@ -61,7 +62,23 @@ const QString SERVER_INSTRUCTIONS = QStringLiteral(
     "regex and ri\"...\" a case-insensitive one; && and || work on booleans "
     "and ! negates. Highlights never hide messages. Blocking ignore phrases "
     "do, and messages they blocked are never stored, so they cannot be "
-    "simulated.");
+    "simulated; list_config on \"ignores\" shows what each blocking phrase "
+    "has hidden since Chatterino started (\"blocked\": count, channels, "
+    "users, last text).\n"
+    "\n"
+    "Typical goal: replace a user highlight plus the ignore phrases that hide "
+    "or un-highlight that user's bot output with one filter highlight, e.g. "
+    "{\"type\": \"filter\", \"name\": \"streamer (typed only)\", "
+    "\"filterText\": \"author.name == \\\"streamer\\\" && !(message.content "
+    "match ri\\\"^Now playing:|you have \\\\d+ points\\\")\", "
+    "\"backgroundColor\": \"#731f8d2b\", \"showInMentions\": true, "
+    "\"alert\": false, \"sound\": \"\"}.\n"
+    "\n"
+    "Output size: get_messages, get_user and test_filter accept "
+    "format=\"lines\" (one short line per message) and get_messages accepts "
+    "distinct=true (identical messages collapsed with a count). list_config "
+    "accepts \"contains\" to list only matching items. Prefer these over "
+    "pulling hundreds of full messages.");
 
 QJsonObject jsonRpcError(const QJsonValue &id, int code, const QString &message)
 {
@@ -365,6 +382,19 @@ McpServer::McpServer(Settings &settings)
             this->restart();
         },
         this->connections_, false);
+
+    // simulate_config compares against how messages were actually
+    // highlighted, which only makes sense for messages that arrived after
+    // the last change
+    this->connections_.managedConnect(
+        this->settings_.sharedHighlights.delayedItemsChanged, [] {
+            noteHighlightSettingsChanged();
+        });
+    this->connections_.managedConnect(
+        this->settings_.ignoredMessages.delayedItemsChanged, [] {
+            noteHighlightSettingsChanged();
+        });
+
     this->restart();
 }
 
@@ -655,16 +685,18 @@ void McpServer::callTool(const QJsonObject &params,
             };
         }
 
+        // Compact: indentation more than doubled the size of message lists,
+        // which pushed results past what clients accept in one tool result
         QString text;
         if (result.data.isObject())
         {
             text = QString::fromUtf8(QJsonDocument(result.data.toObject())
-                                         .toJson(QJsonDocument::Indented));
+                                         .toJson(QJsonDocument::Compact));
         }
         else if (result.data.isArray())
         {
             text = QString::fromUtf8(QJsonDocument(result.data.toArray())
-                                         .toJson(QJsonDocument::Indented));
+                                         .toJson(QJsonDocument::Compact));
         }
         else
         {

@@ -13,6 +13,7 @@
 #include "controllers/highlights/HighlightBlacklistUser.hpp"
 #include "controllers/highlights/types/AnyHighlight.hpp"
 #include "controllers/highlights/types/Common.hpp"
+#include "controllers/ignores/IgnoreController.hpp"
 #include "controllers/ignores/IgnorePhrase.hpp"
 #include "controllers/mcp/McpConfig.hpp"
 #include "controllers/mcp/McpJson.hpp"
@@ -21,6 +22,7 @@
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -50,6 +52,59 @@ void scheduleSave()
         getSettings()->requestSave();
         getApp()->getCommands()->save();
     });
+}
+
+/// A stable id for items that don't have one, derived from their stored
+/// JSON. It survives other items being added or removed (unlike the index)
+/// and changes when the item itself changes, so a stale id can't hit the
+/// wrong item.
+template <typename T>
+QString contentId(const T &item)
+{
+    auto bytes = QJsonDocument(toJson(item)).toJson(QJsonDocument::Compact);
+    return QString::fromLatin1(
+        QCryptographicHash::hash(bytes, QCryptographicHash::Sha1)
+            .toHex()
+            .left(10));
+}
+
+/// The biggest entries of a count map, as {"key": count}
+QJsonObject topCounts(const std::map<QString, qint64> &counts, size_t limit)
+{
+    std::vector<std::pair<QString, qint64>> sorted(counts.begin(),
+                                                   counts.end());
+    std::ranges::sort(sorted, [](const auto &l, const auto &r) {
+        return l.second > r.second;
+    });
+    QJsonObject out;
+    for (size_t i = 0; i < sorted.size() && i < limit; ++i)
+    {
+        out.insert(sorted[i].first.isEmpty() ? u"(other)"_s : sorted[i].first,
+                   sorted[i].second);
+    }
+    return out;
+}
+
+/// What a blocking ignore phrase hid since Chatterino started
+QJsonObject blockedStatsToJson(const QString &pattern)
+{
+    // Called once per phrase while listing; the copy is small
+    auto all = ignoreBlockStats();
+    auto it = all.find(pattern);
+    if (it == all.end() || it->second.count == 0)
+    {
+        return {{"count", 0}};
+    }
+    const auto &stats = it->second;
+    return {
+        {"count", stats.count},
+        {"last", stats.last.toString(Qt::ISODate)},
+        {"lastChannel", stats.lastChannel},
+        {"lastSender", stats.lastSender},
+        {"lastText", stats.lastText},
+        {"channels", topCounts(stats.channels, 5)},
+        {"senders", topCounts(stats.senders, 5)},
+    };
 }
 
 /// Describes how one settings list is read, validated and written
@@ -157,17 +212,21 @@ struct SectionTraits<IgnorePhrase> {
         return getSettings()->ignoredMessages;
     }
 
-    static QString key(const T & /*item*/)
+    static QString key(const T &item)
     {
-        return {};
+        return contentId(item);
     }
 
     static QJsonObject info(const T &item)
     {
-        QJsonObject o;
+        QJsonObject o{{"id", key(item)}};
         if (item.isRegex() && !item.isRegexValid())
         {
             o.insert("error", "Invalid regex");
+        }
+        if (item.isBlock() && !item.highlightOnly())
+        {
+            o.insert("blocked", blockedStatsToJson(item.getPattern()));
         }
         return o;
     }
@@ -308,14 +367,14 @@ struct SectionTraits<HighlightBlacklistUser> {
         return getSettings()->blacklistedUsers;
     }
 
-    static QString key(const T & /*item*/)
+    static QString key(const T &item)
     {
-        return {};
+        return contentId(item);
     }
 
-    static QJsonObject info(const T & /*item*/)
+    static QJsonObject info(const T &item)
     {
-        return {};
+        return {{"id", key(item)}};
     }
 
     static std::variant<T, QString> parse(const QJsonObject &object,
@@ -348,14 +407,14 @@ struct SectionTraits<Nickname> {
         return getSettings()->nicknames;
     }
 
-    static QString key(const T & /*item*/)
+    static QString key(const T &item)
     {
-        return {};
+        return contentId(item);
     }
 
-    static QJsonObject info(const T & /*item*/)
+    static QJsonObject info(const T &item)
     {
-        return {};
+        return {{"id", key(item)}};
     }
 
     static std::variant<T, QString> parse(const QJsonObject &object,
@@ -378,6 +437,47 @@ struct SectionTraits<Nickname> {
         return {};
     }
 };
+
+/// Parses like SectionTraits<T>::parse, and also rejects fields the item
+/// doesn't store. Without this a wrong field name (e.g. "pattern" on a user
+/// highlight, which uses "username") was silently dropped and the item was
+/// saved half-empty.
+template <typename T>
+std::variant<T, QString> parseChecked(const QJsonObject &object,
+                                      const T *previous)
+{
+    auto parsed = SectionTraits<T>::parse(object, previous);
+    const auto *item = std::get_if<T>(&parsed);
+    if (!item)
+    {
+        return parsed;
+    }
+    auto stored = toJson(*item);
+    QStringList unknown;
+    for (auto it = object.begin(); it != object.end(); ++it)
+    {
+        if (it.key() == u"id" || stored.contains(it.key()))
+        {
+            continue;
+        }
+        // Defaults that the item simply doesn't write out
+        const auto &v = it.value();
+        if (v.isNull() || v.isUndefined() || (v.isBool() && !v.toBool()) ||
+            (v.isString() && v.toString().isEmpty()))
+        {
+            continue;
+        }
+        unknown.append(u'"' + it.key() + u'"');
+    }
+    if (!unknown.isEmpty())
+    {
+        auto keys = stored.keys();
+        keys.removeAll(u"id"_s);
+        return u"Unknown field %1 for this item. It stores: %2"_s.arg(
+            unknown.join(u", "_s), keys.join(u", "_s));
+    }
+    return parsed;
+}
 
 /// Type-erased access to one settings list
 struct Section {
@@ -467,7 +567,7 @@ Section makeSection(QString name, QString description, QString idMeaning)
     auto parseAll = [](const QJsonArray &values, std::vector<T> &out) {
         for (qsizetype i = 0; i < values.size(); ++i)
         {
-            auto parsed = Traits::parse(values[i].toObject(), nullptr);
+            auto parsed = parseChecked<T>(values[i].toObject(), nullptr);
             if (auto *error = std::get_if<QString>(&parsed))
             {
                 return u"Item %1: %2"_s.arg(i).arg(*error);
@@ -499,12 +599,15 @@ Section makeSection(QString name, QString description, QString idMeaning)
                 {
                     continue;
                 }
-                for (const auto &existing : vec.raw())
+                const auto &existing = vec.raw();
+                for (size_t j = 0; j < existing.size(); ++j)
                 {
-                    if (Traits::key(existing) == key)
+                    if (Traits::key(existing[j]) == key)
                     {
-                        return u"Item %1: id \"%2\" is already used"_s.arg(i)
-                            .arg(key);
+                        return u"Item %1: an item with id \"%2\" already "
+                               u"exists at index %3"_s.arg(i)
+                            .arg(key)
+                            .arg(j);
                     }
                 }
             }
@@ -540,8 +643,8 @@ Section makeSection(QString name, QString description, QString idMeaning)
                 return u"Update %1: item %2 is updated twice"_s.arg(i).arg(
                     index);
             }
-            auto result =
-                Traits::parse(update.value("value").toObject(), &vec.raw()[index]);
+            auto result = parseChecked<T>(update.value("value").toObject(),
+                                          &vec.raw()[index]);
             if (auto *e = std::get_if<QString>(&result))
             {
                 return u"Update %1: %2"_s.arg(i).arg(*e);
@@ -638,19 +741,32 @@ const std::vector<Section> &sections()
         makeSection<highlights::AnyHighlight>(
             "highlights",
             "Highlights, including the built-in ones (whispers, your "
-            "username, subscriptions...). User-defined types are \"filter\" "
-            "(filterText), \"message\" (pattern), \"user\" (pattern) and "
-            "\"badge\". Outcome fields: showInMentions, alert, sound, "
-            "backgroundColor (\"#AARRGGBB\").",
+            "username, subscriptions...). User-defined types and their "
+            "fields: \"filter\" (filterText), \"message\" (pattern, regex, "
+            "caseSensitive), \"user\" (username) and \"badge\" (badgeName). "
+            "All of them also take name, enabled and the outcome fields "
+            "showInMentions, alert, sound (\"\" for the default sound) and "
+            "backgroundColor (\"#AARRGGBB\"). Example: {\"type\": "
+            "\"filter\", \"name\": \"streamer (typed only)\", "
+            "\"filterText\": \"author.name == \\\"streamer\\\" && "
+            "!(message.content match ri\\\"^Now playing:\\\")\", "
+            "\"backgroundColor\": \"#731f8d2b\", \"showInMentions\": true, "
+            "\"alert\": false, \"sound\": \"\"}.",
             "highlight id"),
         makeSection<IgnorePhrase>(
             "ignores",
-            "Ignore phrases. isBlock=true hides matching messages; "
+            "Ignore phrases (pattern, regex, caseSensitive, isBlock, "
+            "highlightOnly, suppressMentions, suppressHighlight, "
+            "replaceWith). isBlock=true hides matching messages; "
             "otherwise matches are replaced with replaceWith. With isBlock "
             "and highlightOnly, the message is never hidden; when it is "
             "highlighted, suppressMentions keeps it out of /mentions and "
-            "suppressHighlight drops its highlight color.",
-            {}),
+            "suppressHighlight drops its highlight color. Blocking phrases "
+            "list \"blocked\": how many messages they hid since Chatterino "
+            "started, in which channels, from which users, and the last "
+            "one's text.",
+            "content hash shown in list_config; it changes when the item "
+            "changes, so re-list after updating it"),
         makeSection<FilterRecordPtr>(
             "filters",
             "Named filters that can be applied to splits (name, filter, id).",
@@ -663,11 +779,11 @@ const std::vector<Section> &sections()
         makeSection<HighlightBlacklistUser>(
             "highlight_blacklist",
             "Users whose messages are never highlighted (pattern, regex).",
-            {}),
+            "content hash shown in list_config"),
         makeSection<Nickname>("nicknames",
                               "Nicknames shown instead of user names (name, "
                               "replace, isRegex, isCaseSensitive).",
-                              {}),
+                              "content hash shown in list_config"),
     };
     return s;
 }
@@ -823,12 +939,37 @@ QString saveBackup(const QString &reason, QString &error)
 std::variant<highlights::AnyHighlight, QString> parseHighlight(
     const QJsonObject &value, const highlights::AnyHighlight *previous)
 {
-    return SectionTraits<highlights::AnyHighlight>::parse(value, previous);
+    return parseChecked<highlights::AnyHighlight>(value, previous);
 }
 
 std::variant<IgnorePhrase, QString> parseIgnorePhrase(const QJsonObject &value)
 {
-    return SectionTraits<IgnorePhrase>::parse(value, nullptr);
+    return parseChecked<IgnorePhrase>(value, nullptr);
+}
+
+QString ignorePhraseId(const IgnorePhrase &phrase)
+{
+    return contentId(phrase);
+}
+
+namespace {
+
+QDateTime &lastSettingsChange()
+{
+    static QDateTime time;
+    return time;
+}
+
+}  // namespace
+
+void noteHighlightSettingsChanged()
+{
+    lastSettingsChange() = QDateTime::currentDateTime();
+}
+
+QDateTime lastHighlightSettingsChange()
+{
+    return lastSettingsChange();
 }
 
 QJsonArray currentSectionValues(const QString &section)
@@ -852,8 +993,16 @@ std::vector<Tool> makeConfigTools()
             "is also what the change tools take) and, for some lists, extra "
             "read-only info such as \"id\" or \"error\".\n\nLists:\n"_s +
             sectionHelp(),
-        .inputSchema = schema::object({{"section", sectionProperty()}},
-                                      {"section"}),
+        .inputSchema = schema::object(
+            {
+                {"section", sectionProperty()},
+                {"contains",
+                 schema::string(
+                     "Only items whose stored JSON contains this text "
+                     "(ignores case), e.g. a user name or a word from a bot "
+                     "message. Indexes stay those of the full list.")},
+            },
+            {"section"}),
         .run =
             [](const QJsonObject &a, const ToolDone &done) {
                 const auto *section = findSection(args::string(a, "section"));
@@ -863,11 +1012,33 @@ std::vector<Tool> makeConfigTools()
                     return;
                 }
                 auto items = section->list();
-                done(ToolResult::ok(QJsonObject{
+                auto total = items.size();
+                auto contains = args::string(a, "contains");
+                if (!contains.isEmpty())
+                {
+                    QJsonArray filtered;
+                    for (const auto &item : std::as_const(items))
+                    {
+                        auto text = QString::fromUtf8(
+                            QJsonDocument(item.toObject())
+                                .toJson(QJsonDocument::Compact));
+                        if (text.contains(contains, Qt::CaseInsensitive))
+                        {
+                            filtered.append(item);
+                        }
+                    }
+                    items = filtered;
+                }
+                QJsonObject result{
                     {"section", section->name},
-                    {"count", items.size()},
+                    {"count", total},
                     {"items", items},
-                }));
+                };
+                if (!contains.isEmpty())
+                {
+                    result.insert("matched", items.size());
+                }
+                done(ToolResult::ok(result));
             },
     });
 
@@ -875,10 +1046,17 @@ std::vector<Tool> makeConfigTools()
         .name = "add_config_items",
         .description =
             "Add items to a settings list. All items are checked first; if "
-            "any is invalid nothing is added. New highlights and filters get "
-            "an id when none is given. Order matters for highlights: the "
-            "first matching highlight decides the color. A backup is saved "
-            "first.",
+            "any is invalid (including fields the item type doesn't have) "
+            "nothing is added. New highlights and filters get an id when none "
+            "is given. Order matters for highlights: the first matching "
+            "highlight decides the color. A backup is saved first.\n\n"
+            "Filter highlight: {\"type\": \"filter\", \"name\": \"...\", "
+            "\"filterText\": \"<filter expression>\", \"backgroundColor\": "
+            "\"#AARRGGBB\", \"showInMentions\": true, \"alert\": false, "
+            "\"sound\": \"\"}. User highlight: {\"type\": \"user\", "
+            "\"username\": \"...\", ...}. Ignore phrase: {\"pattern\": "
+            "\"...\", \"regex\": true, \"caseSensitive\": false, \"isBlock\": "
+            "true}. See list_config's description for every field.",
         .inputSchema = schema::object(
             {
                 {"section", sectionProperty()},
@@ -968,8 +1146,10 @@ std::vector<Tool> makeConfigTools()
         .name = "remove_config_items",
         .description =
             "Remove items from a settings list by index and/or id. Indexes "
-            "refer to the list before anything is removed. A backup is saved "
-            "first.",
+            "refer to the list before anything is removed. Prefer ids: every "
+            "list has them (ignores, the highlight blacklist and nicknames "
+            "use a content hash), so a list that changed in between can't "
+            "make you remove the wrong item. A backup is saved first.",
         .inputSchema = schema::object(
             {
                 {"section", sectionProperty()},

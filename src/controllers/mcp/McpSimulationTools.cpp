@@ -183,6 +183,19 @@ std::variant<Config, QString> proposedConfig(const QJsonObject &a)
             }
             remove.push_back(index);
         }
+        for (const auto &v : a.value("remove_ignore_ids").toArray())
+        {
+            auto id = v.toString();
+            auto it = std::ranges::find_if(ignoreList, [&](const auto &p) {
+                return ignorePhraseId(p) == id;
+            });
+            if (it == ignoreList.end())
+            {
+                return u"remove_ignore_ids: no ignore phrase with id \"%1\""_s
+                    .arg(id);
+            }
+            remove.push_back(static_cast<int>(it - ignoreList.begin()));
+        }
         std::ranges::sort(remove, std::greater<>());
         auto [first, last] = std::ranges::unique(remove);
         remove.erase(first, last);
@@ -432,6 +445,9 @@ QJsonObject proposalProperties()
         {"remove_ignore_indexes",
          schema::array("Indexes (from list_config) of ignore phrases to drop",
                        schema::integer("Index"))},
+        {"remove_ignore_ids",
+         schema::array("Ids (from list_config) of ignore phrases to drop",
+                       schema::string("Id"))},
     };
 }
 
@@ -464,6 +480,7 @@ std::vector<Tool> makeSimulationTools()
                  schema::boolean("Return non-matching messages instead. "
                                  "Useful together with \"user\" to find spam "
                                  "the filter misses.")},
+                {"format", messageFormatSchema()},
             },
             {"filter"}),
         .run =
@@ -490,6 +507,7 @@ std::vector<Tool> makeSimulationTools()
                                        1, MAX_SCAN);
                 auto show = std::clamp(args::integer(a, "show", 30), 0, 500);
                 auto nonMatching = args::boolean(a, "show_non_matching", false);
+                auto lines = wantsLines(a);
 
                 qsizetype scanned = 0;
                 qsizetype matched = 0;
@@ -534,7 +552,7 @@ std::vector<Tool> makeSimulationTools()
                 for (auto i = first; i < static_cast<qsizetype>(shown.size());
                      ++i)
                 {
-                    messages.append(messageToJson(*shown[i]));
+                    messages.append(formatMessage(*shown[i], lines));
                 }
 
                 done(ToolResult::ok(QJsonObject{
@@ -559,6 +577,7 @@ std::vector<Tool> makeSimulationTools()
     simulateProperties.insert(
         "show", schema::integer("How many changed messages to return. "
                                 "Default 50."));
+    simulateProperties.insert("format", messageFormatSchema());
 
     tools.push_back({
         .name = "simulate_config",
@@ -569,10 +588,13 @@ std::vector<Tool> makeSimulationTools()
             "messages whose outcome changes (blocked, highlighted, shown in "
             "mentions, color). Run it before applying a change and expect "
             "\"changed\" to be 0 for a pure refactor.\n\n\"currentMismatch\" "
-            "counts messages where the simulated current outcome differs "
-            "from what actually happened; it is normally 0, but settings "
-            "changed after a message arrived, or highlights that depend on "
-            "state at that time (e.g. channel.live), show up there.\n\n"
+            "counts messages that arrived after the last change to "
+            "highlights or ignores and whose simulated current outcome "
+            "differs from how they were actually highlighted; it should be 0, "
+            "except for highlights that depend on state at that time (e.g. "
+            "channel.live). Messages from before that change were handled by "
+            "the older settings, so they are only counted in "
+            "\"olderSettingsMessages\" and never reported as mismatches.\n\n"
             "Limits: messages hidden by the current blocking ignores were "
             "never stored, so they can't be compared; use check_message for "
             "those.",
@@ -615,6 +637,9 @@ std::vector<Tool> makeSimulationTools()
                 };
                 QJsonArray examples;
                 QJsonArray mismatchExamples;
+                qsizetype olderSettings = 0;
+                auto lastChange = lastHighlightSettingsChange();
+                auto lines = wantsLines(a);
 
                 forEachUserMessage(
                     channels, scan, args::string(a, "user"),
@@ -626,12 +651,19 @@ std::vector<Tool> makeSimulationTools()
 
                         bool actuallyHighlighted =
                             m->flags.has(MessageFlag::Highlighted);
-                        if (was.highlighted != actuallyHighlighted)
+                        if (lastChange.isValid() &&
+                            (!m->timestamp.isValid() ||
+                             m->timestamp <= lastChange))
+                        {
+                            ++olderSettings;
+                        }
+                        else if (was.highlighted != actuallyHighlighted)
                         {
                             ++currentMismatch;
                             if (mismatchExamples.size() < 10)
                             {
-                                mismatchExamples.append(messageToJson(*m));
+                                mismatchExamples.append(
+                                    formatMessage(*m, lines));
                             }
                         }
 
@@ -666,7 +698,7 @@ std::vector<Tool> makeSimulationTools()
                         if (examples.size() < show)
                         {
                             examples.append(QJsonObject{
-                                {"message", messageToJson(*m)},
+                                {"message", formatMessage(*m, lines)},
                                 {"before",
                                  evaluate(before, *copy, channel, true)
                                      .toJson()},
@@ -683,6 +715,7 @@ std::vector<Tool> makeSimulationTools()
                     {"counts", counts},
                     {"examples", examples},
                     {"currentMismatch", currentMismatch},
+                    {"olderSettingsMessages", olderSettings},
                     {"proposedHighlightChecks",
                      static_cast<qint64>(after.checks.size())},
                     {"proposedIgnorePhrases",

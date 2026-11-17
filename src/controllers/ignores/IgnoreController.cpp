@@ -13,6 +13,8 @@
 #include "providers/twitch/TwitchIrc.hpp"
 #include "singletons/Settings.hpp"
 
+#include <mutex>
+
 namespace {
 
 using namespace chatterino::literals;
@@ -135,6 +137,62 @@ QString makeRegexReplacement(QStringView source,
 
 namespace chatterino {
 
+namespace {
+
+/// Per-phrase maps of channels and senders stop growing at this size
+constexpr size_t MAX_BLOCK_STATS_KEYS = 50;
+constexpr qsizetype MAX_BLOCK_STATS_TEXT = 300;
+
+std::mutex &blockStatsMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::map<QString, IgnoreBlockStats> &blockStats()
+{
+    static std::map<QString, IgnoreBlockStats> stats;
+    return stats;
+}
+
+void bumpCapped(std::map<QString, qint64> &counts, const QString &key)
+{
+    auto it = counts.find(key);
+    if (it != counts.end())
+    {
+        ++it->second;
+    }
+    else if (counts.size() < MAX_BLOCK_STATS_KEYS)
+    {
+        counts.emplace(key, 1);
+    }
+    else
+    {
+        ++counts[QString()];
+    }
+}
+
+void recordBlock(const QString &pattern, const IgnoredMessageParameters &params)
+{
+    std::lock_guard lock(blockStatsMutex());
+    auto &stats = blockStats()[pattern];
+    ++stats.count;
+    stats.last = QDateTime::currentDateTime();
+    stats.lastChannel = params.statsChannel;
+    stats.lastSender = params.statsSender;
+    stats.lastText = params.message.left(MAX_BLOCK_STATS_TEXT);
+    bumpCapped(stats.channels, params.statsChannel);
+    bumpCapped(stats.senders, params.statsSender.toLower());
+}
+
+}  // namespace
+
+std::map<QString, IgnoreBlockStats> ignoreBlockStats()
+{
+    std::lock_guard lock(blockStatsMutex());
+    return blockStats();
+}
+
 bool isIgnoredMessage(IgnoredMessageParameters &&params)
 {
     if (!params.message.isEmpty())
@@ -149,6 +207,10 @@ bool isIgnoredMessage(IgnoredMessageParameters &&params)
                 qCDebug(chatterinoMessage)
                     << "Blocking message because it contains ignored phrase"
                     << phrase.getPattern();
+                if (!params.statsChannel.isEmpty())
+                {
+                    recordBlock(phrase.getPattern(), params);
+                }
                 return true;
             }
         }
